@@ -127,7 +127,7 @@ static void FindLightstyle(const Symtab &symbols)
 void platformInit(void *pfnGetViewInfo, void *, void *)
 {
     Symtab symbols;
-    GetSymtab(symbols, pfnGetViewInfo);
+    GetSymtab(pfnGetViewInfo, symbols);
 
     GetViewVariablePointers(symbols);
     GetCurrentEntityPointer(symbols);

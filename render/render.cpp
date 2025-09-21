@@ -214,8 +214,8 @@ void Initialize(struct engine_studio_api_s *studio, r_studio_interface_s **pinte
 
     // calls platformError on failure
     platformInit(
-        static_cast<void *>(studio->GetViewInfo),
-        static_cast<void *>(studio->GetCurrentEntity),
+        reinterpret_cast<void *>(studio->GetViewInfo),
+        reinterpret_cast<void *>(studio->GetCurrentEntity),
         studio->GetViewEntity());
 
     // unregister r_norefresh
