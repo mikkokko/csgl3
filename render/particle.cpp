@@ -2,7 +2,7 @@
 #include "particle.h"
 #include "immediate.h"
 #include "random.h"
-#include "triapigl3.h"
+#include "internal.h"
 #include "hudgl3.h"
 #include "texture.h"
 
@@ -20,7 +20,7 @@ static particle_t *s_activeTracers;
 
 static GLuint s_particleTexture;
 
-static model_t *s_dotSprite;
+static GLuint s_tracerTexture;
 
 static cvar_t *s_tracerred;
 static cvar_t *s_tracergreen;
@@ -145,7 +145,16 @@ void particleInit()
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, s_particleTextureData);
     }
 
-    s_dotSprite = g_engineStudio.Mod_ForName("sprites/dot.spr", true);
+    // this is probably not going to change so get it here
+    model_t *dotSprite = g_engineStudio.Mod_ForName("sprites/dot.spr", true);
+    if (dotSprite)
+    {
+        SpriteInfo spriteInfo;
+        if (internalGetSpriteInfo(dotSprite, 0, &spriteInfo))
+        {
+            s_tracerTexture = spriteInfo.texture;
+        }
+    }
 
     s_tracerred = g_engfuncs.pfnGetCvarPointer("tracerred");
     s_tracergreen = g_engfuncs.pfnGetCvarPointer("tracergreen");
@@ -271,32 +280,35 @@ static void DrawTracer(particle_t *tracer, float camSide)
     float size = s_tracerSizes[tracer->type];
     Vector3 offset = g_state.viewUp * (dir.x * size) - g_state.viewRight * (dir.y * size);
 
-    g_triapiGL3.Begin(TRI_QUADS);
+    immediateBegin(GL_QUADS);
 
     color24 color = s_tracerColors[tracer->color];
-    g_triapiGL3.Color4ub(color.r, color.g, color.b, static_cast<uint8_t>(tracer->packedColor));
+    float alpha = static_cast<uint8_t>(tracer->packedColor) * (1.0f / 255);
+    float red = color.r * (1.0f / 255) * alpha;
+    float green = color.g * (1.0f / 255) * alpha;
+    float blue = color.b * (1.0f / 255) * alpha;
 
-    g_triapiGL3.Brightness(0);
-    g_triapiGL3.TexCoord2f(0, 0);
+    immediateColor4f(0, 0, 0, 1);
+    immediateTexCoord2f(0, 0);
     Vector3 v1 = point1 + offset;
-    g_triapiGL3.Vertex3f(v1.x, v1.y, v1.z);
+    immediateVertex3f(v1.x, v1.y, v1.z);
 
-    g_triapiGL3.Brightness(1);
-    g_triapiGL3.TexCoord2f(0, 1);
+    immediateColor4f(red, green, blue, 1);
+    immediateTexCoord2f(0, 1);
     Vector3 v2 = point2 + offset;
-    g_triapiGL3.Vertex3f(v2.x, v2.y, v2.z);
+    immediateVertex3f(v2.x, v2.y, v2.z);
 
-    g_triapiGL3.Brightness(1);
-    g_triapiGL3.TexCoord2f(1, 1);
+    immediateColor4f(red, green, blue, 1);
+    immediateTexCoord2f(1, 1);
     Vector3 v3 = point2 - offset;
-    g_triapiGL3.Vertex3f(v3.x, v3.y, v3.z);
+    immediateVertex3f(v3.x, v3.y, v3.z);
 
-    g_triapiGL3.Brightness(0);
-    g_triapiGL3.TexCoord2f(1, 0);
+    immediateColor4f(0, 0, 0, 1);
+    immediateTexCoord2f(1, 0);
     Vector3 v4 = point1 - offset;
-    g_triapiGL3.Vertex3f(v4.x, v4.y, v4.z);
+    immediateVertex3f(v4.x, v4.y, v4.z);
 
-    g_triapiGL3.End();
+    immediateEnd();
 }
 
 static void UpdateTracer(particle_t *tracer, float frametime, float gravity, float accel)
@@ -330,36 +342,46 @@ static void DrawTracers()
         return;
     }
 
+    if (!s_tracerTexture)
+    {
+        GL3_ASSERT(false);
+        return; // matches goldsrc behaviour
+    }
+
     float alpha = s_traceralpha->value;
     s_tracerColors[4].r = static_cast<uint8_t>(s_tracerred->value * alpha * 255.0f);
     s_tracerColors[4].g = static_cast<uint8_t>(s_tracergreen->value * alpha * 255.0f);
     s_tracerColors[4].b = static_cast<uint8_t>(s_tracerblue->value * alpha * 255.0f);
 
-    triapiBegin();
+    immediateDrawStart(false);
 
-    if (g_triapiGL3.SpriteTexture(s_dotSprite, 0))
+    immediateBindTexture(s_tracerTexture);
+
+    // FIXME: won't work with older builds (hudGetClientOldTime doesn't exist)
+    float frametime = g_engfuncs.GetClientTime() - g_engfuncs.hudGetClientOldTime();
+    float accel = Q_max(1.0f - frametime * 0.9f, 0.0f);
+
+    float gravity = g_state.movevars->gravity * frametime;
+    float camSide = Dot(g_state.viewOrigin, g_state.viewForward);
+
+    immediateBlendEnable(GL_TRUE);
+    immediateBlendFunc(GL_ONE, GL_ONE);
+    immediateDepthMask(GL_FALSE);
+
+    immediateCullFace(GL_FALSE);
+
+    for (particle_t *tracer = s_activeTracers; tracer; tracer = tracer->next)
     {
-        // FIXME: won't work with older builds (hudGetClientOldTime doesn't exist)
-        float frametime = g_engfuncs.GetClientTime() - g_engfuncs.hudGetClientOldTime();
-        float accel = Q_max(1.0f - frametime * 0.9f, 0.0f);
-
-        float gravity = g_state.movevars->gravity * frametime;
-        float camSide = Dot(g_state.viewOrigin, g_state.viewForward);
-
-        g_triapiGL3.RenderMode(kRenderTransAdd);
-        g_triapiGL3.CullFace(TRI_NONE);
-
-        for (particle_t *tracer = s_activeTracers; tracer; tracer = tracer->next)
-        {
-            DrawTracer(tracer, camSide);
-            UpdateTracer(tracer, frametime, gravity, accel);
-        }
-
-        g_triapiGL3.CullFace(TRI_FRONT);
-        g_triapiGL3.RenderMode(kRenderNormal);
+        DrawTracer(tracer, camSide);
+        UpdateTracer(tracer, frametime, gravity, accel);
     }
 
-    triapiEnd();
+    immediateCullFace(GL_TRUE);
+
+    immediateBlendEnable(GL_FALSE);
+    immediateDepthMask(GL_TRUE);
+
+    immediateDrawEnd();
 }
 
 static void ParticleDraw(particle_t *particle, const Vector3 &right, const Vector3 &up)

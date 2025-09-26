@@ -7,9 +7,6 @@ namespace Render
 // original engine triapi
 extern triangleapi_t g_triapiGL1;
 
-// FIXME: don't expose this, only done for tracers but we should use immediate.h there directly
-extern const triangleapi_t g_triapiGL3;
-
 void triapiInit();
 
 void triapiBegin();

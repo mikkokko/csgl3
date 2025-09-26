@@ -55,7 +55,6 @@ static void RenderMode(int mode)
 
     case kRenderTransAlpha:
         immediateBlendEnable(GL_TRUE);
-        //FIXME: remember to handle glTexEnv
         immediateBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         immediateDepthMask(GL_FALSE);
         break;
@@ -393,7 +392,7 @@ static void RenderStudioShadows()
     RenderMode(kRenderNormal);
 }
 
-const triangleapi_t g_triapiGL3 = {
+static const triangleapi_t s_triapiGL3 = {
     TRI_API_VERSION,
     RenderMode,
     Begin,
@@ -421,7 +420,7 @@ void triapiInit()
     gl_fog = g_engfuncs.pfnGetCvarPointer("gl_fog");
 
     g_triapiGL1 = *g_engfuncs.pTriAPI;
-    *g_engfuncs.pTriAPI = g_triapiGL3;
+    *g_engfuncs.pTriAPI = s_triapiGL3;
 }
 
 void triapiBegin()
