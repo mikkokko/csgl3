@@ -6,11 +6,6 @@
 // already defined, will cause a warning if the definition doesn't match
 #define MAX_LIGHTSTYLES 64
 
-// brush model lighting types
-#define BRUSH_LIGHTING_NONE 0
-#define BRUSH_LIGHTING_LIGHTMAP 1
-#define BRUSH_LIGHTING_MAX (BRUSH_LIGHTING_LIGHTMAP + MAX_SHADER_LIGHTS)
-
 // engine constants, already defined in studio.h
 // will cause a warning if the definition doesn't match
 #define MAXSTUDIOBONES 128

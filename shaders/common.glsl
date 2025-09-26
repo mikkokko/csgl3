@@ -15,7 +15,7 @@ layout(std140) uniform FrameConstants
 
     vec4 clientTime; // FIXME: could pack with... something
 
-    vec4 lightPositions[MAX_SHADER_LIGHTS];
+    vec4 lightPositions[MAX_SHADER_LIGHTS]; // w stores 1/radius
     vec4 lightColors[MAX_SHADER_LIGHTS];
 
     // packed, accessed with lightstyles[i / 4][i % 4]
@@ -47,3 +47,6 @@ float FogFactor(float fogCoord)
     float fogFactor = exp2(fogExp2Param * fogCoord * fogCoord);    
     return clamp(fogFactor, 0.0, 1.0);
 }
+
+// software style overbright
+#define OVERBRIGHT 0

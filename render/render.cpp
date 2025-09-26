@@ -52,7 +52,7 @@ struct FrameConstants
 
     Vector4 clientTime; // FIXME: could pack with... something
 
-    Vector4 lightPositions[MAX_SHADER_LIGHTS];
+    Vector4 lightPositions[MAX_SHADER_LIGHTS]; // w stores 1/radius
     Vector4 lightColors[MAX_SHADER_LIGHTS];
 
     // accessed with lightstyles[i / 4][i % 4]
@@ -398,7 +398,7 @@ static Matrix4 SkyMatrix(const Vector3 &cameraPosition)
     return result;
 }
 
-static int UpdateConstantBuffer(const Matrix4 &vmViewProjectionMatrix)
+static void UpdateFrameConstants(const Matrix4 &vmViewProjectionMatrix)
 {
     FrameConstants frameConstants;
     frameConstants.viewProjectionMatrix = g_state.viewProjectionMatrix;
@@ -431,7 +431,7 @@ static int UpdateConstantBuffer(const Matrix4 &vmViewProjectionMatrix)
             break;
         }
 
-        frameConstants.lightPositions[numLights] = { light->origin, light->radius };
+        frameConstants.lightPositions[numLights] = { light->origin, 1.0f / light->radius };
 
         frameConstants.lightColors[numLights].x = static_cast<float>(light->color.r) / 255.0f;
         frameConstants.lightColors[numLights].y = static_cast<float>(light->color.g) / 255.0f;
@@ -440,12 +440,16 @@ static int UpdateConstantBuffer(const Matrix4 &vmViewProjectionMatrix)
         numLights++;
     }
 
+    for (int i = numLights; i < MAX_SHADER_LIGHTS; i++)
+    {
+        frameConstants.lightPositions[i] = {};
+        frameConstants.lightColors[i] = {};
+    }
+
     frameConstants.clientTime.x = g_engfuncs.GetClientTime();
 
     BufferSpan span = dynamicUniformData(&frameConstants, sizeof(frameConstants));
     commandBindUniformBuffer(0, span.buffer, span.offset, sizeof(frameConstants));
-
-    return numLights;
 }
 
 void renderFogEnable(bool enable)
@@ -568,7 +572,7 @@ static void SetupViewport(const SceneParams &params)
     glClear(GL_DEPTH_BUFFER_BIT);
 }
 
-static int SetupView(const SceneParams &params)
+static void SetupView(const SceneParams &params)
 {
     Matrix4 viewMatrix = ViewMatrix(params.origin, params.forward, params.right, params.up);
 
@@ -606,11 +610,9 @@ static int SetupView(const SceneParams &params)
     // update these mofos
     platformSetViewInfo(params.origin, params.forward, params.right, params.up);
 
-    int dlightCount = UpdateConstantBuffer(vmViewProjectionMatrix);
+    UpdateFrameConstants(vmViewProjectionMatrix);
 
     UpdateFogConstants();
-
-    return dlightCount;
 }
 
 static void SceneRenderPass(const SceneParams &params, bool onlyClientDraw)
@@ -627,12 +629,12 @@ static void SceneRenderPass(const SceneParams &params, bool onlyClientDraw)
 
     lightstyleUpdate();
 
-    int dlightCount = SetupView(params);
+    SetupView(params);
 
     if (!onlyClientDraw)
     {
         // draw world and solid brush entities
-        entityDrawSolidBrushes(dlightCount);
+        entityDrawSolidBrushes();
 
         // solid studio models and sprites
         entityDrawSolidEntities();

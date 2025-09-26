@@ -8,7 +8,7 @@ namespace Render
 void entitySortTranslucents(const Vector3 &cameraPosition);
 
 // draw the world and solid brush entities
-void entityDrawSolidBrushes(int dlightCount);
+void entityDrawSolidBrushes();
 
 // draw solid studio models and sprites
 void entityDrawSolidEntities();

@@ -5,8 +5,6 @@
 uniform sampler2D u_texture;
 uniform sampler2D u_lightmap;
 
-uniform int u_dlightCount;
-
 in vec3 fragPosition;
 in vec4 texCoord;
 
@@ -24,36 +22,21 @@ vec3 Brighten(vec3 f)
     return mix(a, b, step(k_brighten, f));
 }
 
-// software style overbright
-#define OVERBRIGHT 0
-
 vec3 ApplyBrightness(vec3 value)
 {
     value = pow(value, vec3(k_lightgamma));
-
     value *= 2.0;
-#if (OVERBRIGHT == 0)
-    value = min(value, 1.0);
-#endif
-
     value *= max(k_brightness, 1.0);
-
     value = Brighten(value);
-
     value = pow(value, vec3(1.0 / k_gamma));
-
-#if (OVERBRIGHT == 0)
-    value = min(value, 1.0);
-#endif
-
     return value;
 }
 
 // made this the fuck up, completely wrong and based on nothing
-vec3 AddLight(vec3 pos, float radius, vec3 color)
+vec3 AddLight(vec3 pos, float invRadius, vec3 color)
 {
     float dist = distance(pos, fragPosition);
-    float attenuation = max(radius - dist, 0.0) / radius;
+    float attenuation = max(0.0, 1.0 - dist * invRadius);
     return color * attenuation * 0.3; // wtf is 0.3? no idea
 }
 
@@ -78,7 +61,7 @@ void main()
     lightmap += f_lightmapWeights[2] * texture(u_lightmap, texCoord.zw + uvOffset * 2.0).rgb;
     lightmap += f_lightmapWeights[3] * texture(u_lightmap, texCoord.zw + uvOffset * 3.0).rgb;
 
-    for (int i = 0; i < u_dlightCount; i++)
+    for (int i = 0; i < MAX_SHADER_LIGHTS; i++)
     {
         lightmap += AddLight(lightPositions[i].xyz,
             lightPositions[i].w,
@@ -86,6 +69,11 @@ void main()
     }
 
     lightmap = ApplyBrightness(lightmap);
+
+#if (OVERBRIGHT == 0)
+    lightmap = min(lightmap, 1.0);
+#endif
+
     diffuse.rgb *= lightmap;
 #else
     diffuse *= renderColor;

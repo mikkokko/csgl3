@@ -47,7 +47,8 @@ vec3 ApplyElights(vec3 srgb, vec3 normal, vec3 position)
         float magnitudeSquared = dot(direction, direction);
         float radiusSquared = elightPositions[i].w;
 
-        float attenuation = radiusSquared / (magnitudeSquared * sqrt(magnitudeSquared));
+        float magrsqrt = inversesqrt(magnitudeSquared);
+        float attenuation = radiusSquared * (magrsqrt * magrsqrt * magrsqrt);
 
         elights += elightColors[i].rgb * NdotL * attenuation;
     }
@@ -75,8 +76,9 @@ vec3 StudioLighting(vec3 normal, vec3 position)
     diffuse = ambientLight + (shadeLight * diffuse);
     diffuse = ApplyBrightness(diffuse);
 
-    // diffuse saturation can be omitted for a fullbright effect
-    diffuse = clamp(diffuse, 0.0, 1.0);
+#if (OVERBRIGHT == 0)
+    diffuse = min(diffuse, 1.0);
+#endif
 
     vec3 result = renderColor.rgb * diffuse;
 

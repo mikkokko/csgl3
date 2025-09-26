@@ -170,8 +170,7 @@ void brushDrawSolids(
     cl_entity_t **entities,
     int entityCount,
     cl_entity_t **alphaEntities,
-    int alphaEntityCount,
-    int dlightCount);
+    int alphaEntityCount);
 
 void brushDrawTranslucent(cl_entity_t *entity, float blend);
 void brushEndTranslucents();

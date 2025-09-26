@@ -349,11 +349,11 @@ void entityDrawTranslucentEntities(const Vector3 &viewOrigin, const Vector3 &vie
     }
 }
 
-void entityDrawSolidBrushes(int dlightCount)
+void entityDrawSolidBrushes()
 {
     Bucket &solid = s_buckets[BucketBrushSolid];
     Bucket &alpha = s_buckets[BucketBrushAlphaTest];
-    brushDrawSolids(solid.entities, solid.count, alpha.entities, alpha.count, dlightCount);
+    brushDrawSolids(solid.entities, solid.count, alpha.entities, alpha.count);
 }
 
 void entityDrawSolidEntities()

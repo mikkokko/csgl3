@@ -24,7 +24,6 @@ struct BrushConstants
 struct BrushShaderOptions
 {
     bool lightmapped;
-    int dlightCount;
 };
 
 static const VertexAttrib s_vertexAttribs[] = {
@@ -54,7 +53,6 @@ public:
         static const ShaderUniform uniforms[] = {
             SHADER_UNIFORM_CONST(u_texture, 0),
             SHADER_UNIFORM_CONST(u_lightmap, 1),
-            SHADER_UNIFORM_MUT(BrushShader, u_dlightCount),
             SHADER_UNIFORM_MUT(BrushShader, u_scroll),
             SHADER_UNIFORM_TERM()
         };
@@ -62,7 +60,6 @@ public:
         return uniforms;
     }
 
-    GLint u_dlightCount;
     GLint u_scroll;
 };
 
@@ -451,7 +448,6 @@ static void DrawAllSurfaces(gl3_worldmodel_t *worldmodel, cl_entity_t *entity, c
     BrushShader &shader = SelectShader(options, alphaTest);
 
     commandUseProgram(&shader);
-    commandUniform1i(shader.u_dlightCount, options.dlightCount);
 
     DrawSurfaces(worldmodel, entity, shader, textureOverride);
 
@@ -570,8 +566,7 @@ void brushDrawSolids(
     cl_entity_t **entities,
     int entityCount,
     cl_entity_t **alphaEntities,
-    int alphaEntityCount,
-    int dlightCount)
+    int alphaEntityCount)
 {
     MapIndexBuffer();
 
@@ -582,7 +577,6 @@ void brushDrawSolids(
     {
         BrushShaderOptions options;
         options.lightmapped = true;
-        options.dlightCount = dlightCount;
 
         LinkAndDrawWorldModel(options);
 
@@ -603,7 +597,6 @@ void brushDrawSolids(
     {
         BrushShaderOptions options;
         options.lightmapped = true;
-        options.dlightCount = dlightCount;
 
         for (int i = 0; i < alphaEntityCount; i++)
         {
@@ -677,7 +670,6 @@ void brushDrawTranslucent(cl_entity_t *entity, float blend)
 
     BrushShaderOptions options;
     options.lightmapped = false;
-    options.dlightCount = 0;
 
     Vector4 renderColor;
     SetBlendingAndGetColor(entity, renderColor, blend);
