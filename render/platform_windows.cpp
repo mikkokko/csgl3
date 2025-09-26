@@ -96,22 +96,29 @@ static bool PatternMatches(const uint8_t *haystack, const uint16_t *needle, int 
     return true;
 }
 
-static void *FindCodePattern(uint8_t *start, uint8_t *end, const uint16_t *pattern, int patternSize)
+static uint8_t *NextCodePattern(uint8_t *lastMatch, uint8_t *start, uint8_t *end, const uint16_t *pattern, int patternSize)
 {
-    void *match = nullptr;
+    uint8_t *address = lastMatch ? (lastMatch + 1) : start;
 
-    for (uint8_t *address = start; address < end - patternSize; address++)
+    for (; address < end - patternSize; address++)
     {
         if (PatternMatches(address, pattern, patternSize))
         {
-            if (match)
-            {
-                // matched twice?
-                return nullptr;
-            }
-
-            match = address;
+            return address;
         }
+    }
+
+    return nullptr;
+}
+
+static void *FindCodePattern(uint8_t *start, uint8_t *end, const uint16_t *pattern, int patternSize)
+{
+    uint8_t *match = NextCodePattern(nullptr, start, end, pattern, patternSize);
+
+    // if this pattern occurs more than once, we're cooked
+    if (match && NextCodePattern(match, start, end, pattern, patternSize))
+    {
+        return nullptr;
     }
 
     return match;
@@ -198,48 +205,39 @@ static void FindLightstyle(void *pointerInCodeSection, void *pointerInDataSectio
         platformError("Failed to get engine code section bounds");
     }
 
-    // wtf -  works with all official windows and linux builds
-    uint16_t pattern[] = { 0x83, 0xE8, 0x61 };
-
-    uint8_t *address = (uint8_t *)FindCodePattern(codeStart, codeEnd, pattern, Q_countof(pattern));
-    if (!address)
-    {
-        platformError("Failed to find R_AnimateLight");
-    }
-
-    uint8_t *start, *end;
-    if (!GetSection(pointerInDataSection, &start, &end))
+    uint8_t *dataStart, *dataEnd;
+    if (!GetSection(pointerInDataSection, &dataStart, &dataEnd))
     {
         platformError("Failed to get engine data section bounds");
     }
 
-    // max 64 bytes back as a safeguard
-    for (int i = 0; i < 64; i++)
+    // try to find "Q_memset(cl_lightstyle, 0, sizeof(cl_lightstyle))" and get the pointer from there
+    uint16_t pattern[] = { 0x68, 0x00, 0x11, 0x00, 0x00, 0x6A, 0x00, 0x68 };
+
+    uint8_t *match = nullptr;
+    while (true)
     {
-        // read the potential address
-        uint8_t *test = *(uint8_t **)address;
-
-        // make sure it's at least 4-aligned, and check the bounds
-        if (((uintptr_t)test % 4) == 0 && start < test && end > test)
+        match = NextCodePattern(match, codeStart, codeEnd, pattern, Q_countof(pattern));
+        if (!match)
         {
-            // this is most likely it, if it's not 16-aligned, bring it back 4 bytes
-            if (((uintptr_t)test % 16) != 0)
-            {
-                test -= 4;
-            }
-
-            // it hasn't been written to yet so it must be all zeroes
-            if (!memcmp(test, &s_nullstyle, sizeof(s_nullstyle)))
-            {
-                s_lightstyle = (Lightstyle *)test;
-                return;
-            }
+            platformError("Could not get a pointer to cl_lightstyle");
         }
 
-        address--;
-    }
+        // cl_lightstyle pointer comes right after the push
+        uint8_t *test = *(uint8_t **)(match + Q_countof(pattern));
+        if (test < dataStart || test > dataEnd)
+        {
+            continue;
+        }
 
-    platformError("Could not get a pointer to cl_lightstyle");
+        // it hasn't been written to yet so it must be all zeroes
+        if (!memcmp(test, &s_nullstyle, sizeof(s_nullstyle)))
+        {
+            // found it
+            s_lightstyle = (Lightstyle *)test;
+            return;
+        }
+    }
 }
 
 void platformInit(void *pfnGetViewInfo, void *pfnGetCurrentEntity, void *viewEntity)
