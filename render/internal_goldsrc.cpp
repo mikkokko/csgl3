@@ -520,21 +520,6 @@ static void LoadPlanes(const goldsrc::model_t &engineModel, gl3_worldmodel_t &mo
     }
 }
 
-static void LoadTexinfo(const goldsrc::model_t &engineModel, gl3_worldmodel_t &model)
-{
-    model.numtexinfo = engineModel.numtexinfo;
-    model.texinfo = memoryLevelAlloc<gl3_texinfo_t>(model.numtexinfo);
-
-    for (int i = 0; i < model.numtexinfo; i++)
-    {
-        int texture_index = LookupTextureIndex(engineModel, engineModel.texinfo[i].texture);
-        if (texture_index != -1)
-        {
-            model.texinfo[i].texture = &model.textures[texture_index];
-        }
-    }
-}
-
 bool LightmapWideTall(const goldsrc::msurface_t *surface, int &width, int &height)
 {
     if (surface->flags & SURF_SKY)
@@ -588,9 +573,9 @@ static void LoadFaces(const goldsrc::model_t &engineModel, gl3_worldmodel_t &mod
         GL3_ASSERT(plane_index >= 0 && plane_index < engineModel.numplanes);
         dest->plane = &model.planes[plane_index];
 
-        int texinfo_index = source->texinfo - engineModel.texinfo;
-        GL3_ASSERT(texinfo_index >= 0 && texinfo_index < engineModel.numtexinfo);
-        dest->texinfo = &model.texinfo[texinfo_index];
+        int texture_index = LookupTextureIndex(engineModel, source->texinfo->texture);
+        GL3_ASSERT(texture_index != -1);
+        dest->texture = &model.textures[texture_index];
 
         // keep going until we hit the terminator
         int style_count = 0;
@@ -783,7 +768,6 @@ bool internalLoadBrushModel(model_t *model, gl3_worldmodel_t *outModel)
 
     LoadTextures(src, *outModel);
     LoadPlanes(src, *outModel);
-    LoadTexinfo(src, *outModel);
     LoadFaces(src, *outModel);
     LoadMarksurfaces(src, *outModel);
     LoadLeafs(src, *outModel);
@@ -808,7 +792,7 @@ gl3_brushvert_t *internalBuildVertexBuffer(model_t *model, gl3_worldmodel_t *out
         num_verts += surface->numedges;
     }
 
-    outModel->index_size = (num_verts > UINT16_MAX) ? 4 : 2;
+    outModel->index_size = (num_verts > 0xffff) ? 4 : 2;
 
     // temporary memory for vbo contents
     gl3_brushvert_t *vertex_buffer = temp.Alloc<gl3_brushvert_t>(num_verts);

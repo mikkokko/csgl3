@@ -48,11 +48,6 @@ struct gl3_texture_t
     gl3_texture_t *alternate_anims;
 };
 
-struct gl3_texinfo_t
-{
-    gl3_texture_t *texture;
-};
-
 struct gl3_node_t
 {
     int contents;
@@ -91,7 +86,7 @@ struct gl3_surface_t
     int numverts;
 
     gl3_surface_t *texturechain;
-    gl3_texinfo_t *texinfo;
+    gl3_texture_t *texture;
     byte styles[MAXLIGHTMAPS];
 
     // redundant bloat added for lightmap packing so
@@ -131,9 +126,6 @@ struct gl3_worldmodel_t
 
     int numnodes;
     gl3_node_t *nodes;
-
-    int numtexinfo;
-    gl3_texinfo_t *texinfo;
 
     int numsurfaces;
     gl3_surface_t *surfaces;

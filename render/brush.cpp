@@ -242,7 +242,7 @@ static void AddSurface(gl3_worldmodel_t *model, gl3_surface_t *surface, bool dra
     }
     else
     {
-        gl3_texture_t *texture = surface->texinfo->texture;
+        gl3_texture_t *texture = surface->texture;
         surface->texturechain = texture->texturechain;
         texture->texturechain = surface;
     }
@@ -302,7 +302,7 @@ static float ScrollAmount(cl_entity_t *entity, gl3_surface_t *surface)
         speed = -speed;
     }
 
-    float scroll = 1.0f / (float)surface->texinfo->texture->width * g_engfuncs.GetClientTime() * speed;
+    float scroll = 1.0f / (float)surface->texture->width * g_engfuncs.GetClientTime() * speed;
     if (scroll < 0)
     {
         return fmodf(scroll, -1);
@@ -374,12 +374,12 @@ static void DrawWaterSurfaces(cl_entity_t *entity, GLuint textureOverride)
     commandBindTexture(0, GL_TEXTURE_2D, prevTexture);
 
     // very hacky!!!
-    int textureIndex = s_waterSurfaces->texinfo->texture - g_worldmodel->textures;
+    int textureIndex = s_waterSurfaces->texture - g_worldmodel->textures;
     g_state.waterColor = internalWaterColor(g_worldmodel->engine_model, textureIndex);
 
     for (gl3_surface_t *surface = s_waterSurfaces; surface; surface = surface->texturechain)
     {
-        gl3_texture_t *texture = surface->texinfo->texture;
+        gl3_texture_t *texture = surface->texture;
 
         // shouldn't happen anymore
         GL3_ASSERT(texture->gl_texturenum);
