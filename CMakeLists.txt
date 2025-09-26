@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.13)
 
 project(render)
 
@@ -83,9 +83,11 @@ target_link_libraries(render PRIVATE meshoptimizer)
 # shader junk
 set(SHADER_DIR ${CMAKE_CURRENT_LIST_DIR}/shaders)
 file(GLOB SHADER_SOURCES ${SHADER_DIR}/*.vert ${SHADER_DIR}/*.frag)
-set(SHADER_SOURCES_FILE ${SHADER_DIR}/shader_sources.inl)
+set(SHADER_SOURCES_FILE ${CMAKE_CURRENT_BINARY_DIR}/shader_sources.inl)
 
-target_compile_definitions(render PRIVATE SHADER_PATH="${SHADER_DIR}")
+target_compile_definitions(render PRIVATE
+    SHADER_PATH="${SHADER_DIR}"
+    SHADER_SOURCES_FILE="${SHADER_SOURCES_FILE}")
 
 add_custom_command(
     OUTPUT ${SHADER_SOURCES_FILE}

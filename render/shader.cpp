@@ -14,7 +14,6 @@
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
-
 #else
 struct ShaderData
 {
@@ -23,7 +22,7 @@ struct ShaderData
     int size;
 };
 
-#include "../shaders/shader_sources.inl"
+#include SHADER_SOURCES_FILE
 #endif
 
 namespace Render
