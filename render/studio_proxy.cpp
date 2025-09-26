@@ -15,7 +15,7 @@ engine_studio_api_t orig_studio;
     { \
         static bool bitched; \
         if (!bitched) \
-            g_engfuncs.Con_Printf("%s\n", __FUNCTION__); \
+            g_engfuncs.Con_Printf("%s not implemented\n", __FUNCTION__); \
         bitched = true; \
     } while (0)
 
