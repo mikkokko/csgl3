@@ -135,29 +135,32 @@ void brushFreeWorldModel()
     glDeleteTextures(1, &g_worldmodel->lightmap_texture);
 }
 
-static DynamicIndexState s_indexState;
-
 static void MapIndexBuffer()
 {
-    s_indexState.Map(g_worldmodel->index_size);
-    commandBindIndexBuffer(s_indexState.IndexBuffer());
+    g_dynamicIndexState.Lock(g_worldmodel->index_size);
+    commandBindIndexBuffer(g_dynamicIndexState.IndexBuffer());
 }
 
 static void UnmapIndexBuffer()
 {
-    s_indexState.Unmap();
+    g_dynamicIndexState.Unlock();
 }
 
 static void DrawIndexBuffer()
 {
     int indexByteOffset;
-    int indexCount = s_indexState.UpdateDrawOffset(indexByteOffset);
+    int indexCount = g_dynamicIndexState.UpdateDrawOffset(indexByteOffset);
     if (!indexCount)
     {
         return;
     }
 
-    commandDrawElements(GL_TRIANGLES, indexCount, s_indexState.IndexType(), indexByteOffset);
+    commandDrawElements(GL_TRIANGLES, indexCount, g_dynamicIndexState.IndexType(), indexByteOffset);
+}
+
+static void AddSurfaceToIndexBuffer(gl3_surface_t *surface)
+{
+    g_dynamicIndexState.Write(surface->indices, surface->numindices);
 }
 
 static gl3_texture_t *TextureAnimation(cl_entity_t *entity, gl3_texture_t *texture)
@@ -283,26 +286,6 @@ static void LinkLeaves(gl3_worldmodel_t *worldmodel)
     }
 }
 
-static void AddSurfaceToIndexBuffer(gl3_surface_t *surface)
-{
-#if 0
-    int indexCount = surface->numindices;
-
-    if (s_indexState.offset + indexCount > s_indexState.capacity)
-    {
-        // FIXME: this can actually hit...
-        platformError("Brush index buffer overflow");
-    }
-
-    int indexSize = g_worldmodel->index_size;
-
-    GL3_ASSERT(s_indexState.data);
-    memcpy(&s_indexState.data[s_indexState.offset * indexSize], surface->indices, surface->numindices * indexSize);
-    s_indexState.offset += indexCount;
-#endif
-
-    s_indexState.WriteData(surface->indices, surface->numindices);
-}
 
 static float ScrollAmount(cl_entity_t *entity, gl3_surface_t *surface)
 {
@@ -472,15 +455,8 @@ static void DrawAllSurfaces(gl3_worldmodel_t *worldmodel, cl_entity_t *entity, c
 
     DrawSurfaces(worldmodel, entity, shader, textureOverride);
 
-    // stupid hack, decal indices are stuffed into the same index buffer
-    {
-        //GL3_ASSERT(s_indexState.offsetLastDraw == s_indexState.offset);
-        //int indexSize = g_worldmodel->index_size;
-        //int curByteOffset = s_indexState.bufferByteOffset + (s_indexState.offsetLastDraw * indexSize);
-        //decalDrawAll(s_indexState.data, indexSize, curByteOffset, s_indexState.offset);
-        //s_indexState.offsetLastDraw = s_indexState.offset;
-        decalDrawAll(s_indexState);
-    }
+    // decal indices are stuffed into the same index buffer
+    decalDrawAll(g_dynamicIndexState);
 
     if (s_waterSurfaces)
     {

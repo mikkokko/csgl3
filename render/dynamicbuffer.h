@@ -19,32 +19,11 @@ void dynamicBuffersUnmap();
 // this can cause redundant copying, but is easier to use
 BufferSpan dynamicUniformData(const void *data, int size);
 
-BufferSpan dynamicVertexBegin(int vertexSize, int &maxCapacity);
-void dynamicVertexEnd(int vertexSize, int vertexCountWritten);
-
-BufferSpan dynamicIndexBegin(int indexSize, int &maxCapacity);
-void dynamicIndexEnd(int indexSize, int indexCountWritten);
-
 class DynamicVertexState
 {
 public:
-    void Map(int vertexSize)
-    {
-        m_vertexSize = vertexSize;
-        BufferSpan span = dynamicVertexBegin(m_vertexSize, m_capacity);
-        m_bufferHandle = span.buffer;
-        m_baseVertex = span.offset / vertexSize;
-        GL3_ASSERT((span.offset % vertexSize) == 0);
-        m_data = static_cast<uint8_t *>(span.pinned);
-
-        m_offset = 0;
-    }
-
-    void Unmap()
-    {
-        dynamicVertexEnd(m_vertexSize, m_offset);
-        m_data = nullptr; // for IsMapped
-    }
+    void Lock(int vertexSize);
+    void Unlock();
 
     // index for the vertex at current offset, considering the entire buffer
     int IndexBase() const
@@ -52,11 +31,11 @@ public:
         return m_baseVertex + m_offset;
     }
 
-    bool IsMapped() const { return m_data ? true : false; }
+    bool IsLocked() const { return m_data ? true : false; }
 
     GLuint VertexBuffer() const { return m_bufferHandle; }
 
-    void WriteData(const void *data, int vertexCount)
+    void Write(const void *data, int vertexCount)
     {
         if (m_offset + vertexCount > m_capacity)
         {
@@ -90,28 +69,13 @@ private:
     int m_offset{};
 };
 
+extern DynamicVertexState g_dynamicVertexState;
+
 class DynamicIndexState
 {
 public:
-    void Map(int indexSize)
-    {
-        GL3_ASSERT(indexSize == 2 || indexSize == 4);
-
-        m_indexSize = indexSize;
-        BufferSpan span = dynamicIndexBegin(m_indexSize, m_capacity);
-        m_bufferHandle = span.buffer;
-        m_byteOffset = span.offset;
-        GL3_ASSERT((m_byteOffset % indexSize) == 0);
-        m_data = static_cast<uint8_t *>(span.pinned);
-
-        m_offset = 0;
-        m_offsetLastDraw = 0;
-    }
-
-    void Unmap()
-    {
-        dynamicIndexEnd(m_indexSize, m_offset);
-    }
+    void Lock(int indexSize);
+    void Unlock();
 
     GLuint IndexBuffer() const { return m_bufferHandle; }
     int IndexSize() const { return m_indexSize; }
@@ -133,7 +97,7 @@ public:
         return indexCount;
     }
 
-    void WriteData(const void *data, int indexCount)
+    void Write(const void *data, int indexCount)
     {
         if (m_offset + indexCount > m_capacity)
         {
@@ -167,6 +131,8 @@ private:
     int m_offset{};
     int m_offsetLastDraw{};
 };
+
+extern DynamicIndexState g_dynamicIndexState;
 
 }
 

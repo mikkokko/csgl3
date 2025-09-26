@@ -21,11 +21,6 @@ class DynamicBuffer
     int m_offset{};
     GLBuffer m_buffers[BufferCount]{};
 
-#ifdef SCHIZO_DEBUG
-    bool m_writingRegion{ false };
-    int m_elementSize{ -1 };
-#endif
-
 public:
     DynamicBuffer(GLenum target, const int byteSize)
         : m_target{ target }
@@ -56,8 +51,6 @@ public:
         buffer.mapped = static_cast<uint8_t *>(mapped);
         GL3_ASSERT(m_offset == 0);
     }
-
-    int m_maxSize{};
 
     void Unmap(int index)
     {
@@ -95,15 +88,11 @@ public:
         }
 #endif
 
-        m_maxSize = Q_max(m_offset, m_maxSize);
-
         m_offset = 0;
     }
 
     BufferSpan Upload(int index, const void *data, int size, int alignment)
     {
-        GL3_ASSERT(m_writingRegion == 0);
-
         m_offset = AlignUp(m_offset, alignment);
 
         if (m_offset + size > m_bufferSize)
@@ -143,27 +132,11 @@ public:
         span.offset = m_offset;
         span.pinned = &buffer.mapped[m_offset];
 
-        // debug slop
-#ifdef SCHIZO_DEBUG
-        GL3_ASSERT(m_writingRegion == false);
-        GL3_ASSERT(m_elementSize == -1);
-        m_writingRegion = true;
-        m_elementSize = elementSize;
-#endif
-
         return span;
     }
 
     void EndRegion(int elementSize, int elementCount)
     {
-        // debug slop
-#ifdef SCHIZO_DEBUG
-        GL3_ASSERT(m_writingRegion == true);
-        GL3_ASSERT(m_elementSize == elementSize);
-        m_writingRegion = false;
-        m_elementSize = -1;
-#endif
-
         // m_offset was aligned by BeginRegion
         int bytesWritten = elementCount * elementSize;
         GL3_ASSERT((m_offset % elementSize) == 0);
@@ -177,9 +150,12 @@ static int s_bufferFrame;
 
 static int s_uniformBufferOffsetAlignment;
 
-static DynamicBuffer s_vertex{ GL_ARRAY_BUFFER, 1 << 17 };
+static DynamicBuffer s_vertex{ GL_ARRAY_BUFFER, 1 << 18 };
 static DynamicBuffer s_index{ GL_ELEMENT_ARRAY_BUFFER, 1 << 19 };
 static DynamicBuffer s_uniform{ GL_UNIFORM_BUFFER, 1 << 17 };
+
+DynamicVertexState g_dynamicVertexState;
+DynamicIndexState g_dynamicIndexState;
 
 void dynamicBuffersInit()
 {
@@ -210,24 +186,49 @@ BufferSpan dynamicUniformData(const void *data, int size)
     return s_uniform.Upload(s_bufferFrame, data, size, s_uniformBufferOffsetAlignment);
 }
 
-BufferSpan dynamicVertexBegin(int vertexSize, int &maxCapacity)
+void DynamicVertexState::Lock(int vertexSize)
 {
-    return s_vertex.BeginRegion(s_bufferFrame, vertexSize, maxCapacity);
+    GL3_ASSERT(!m_data);
+    m_vertexSize = vertexSize;
+
+    BufferSpan span = s_vertex.BeginRegion(s_bufferFrame, m_vertexSize, m_capacity);
+    m_bufferHandle = span.buffer;
+    m_baseVertex = span.offset / vertexSize;
+    m_data = static_cast<uint8_t *>(span.pinned);
+
+    m_offset = 0;
 }
 
-void dynamicVertexEnd(int vertexSize, int vertexCountWritten)
+void DynamicVertexState::Unlock()
 {
-    s_vertex.EndRegion(vertexSize, vertexCountWritten);
+    GL3_ASSERT(m_data);
+    m_data = nullptr;
+
+    s_vertex.EndRegion(m_vertexSize, m_offset);
 }
 
-BufferSpan dynamicIndexBegin(int indexSize, int &maxCapacity)
+void DynamicIndexState::Lock(int indexSize)
 {
-    return s_index.BeginRegion(s_bufferFrame, indexSize, maxCapacity);
+    GL3_ASSERT(indexSize == 2 || indexSize == 4);
+
+    GL3_ASSERT(!m_data);
+    m_indexSize = indexSize;
+
+    BufferSpan span = s_index.BeginRegion(s_bufferFrame, m_indexSize, m_capacity);
+    m_bufferHandle = span.buffer;
+    m_byteOffset = span.offset;
+    m_data = static_cast<uint8_t *>(span.pinned);
+
+    m_offset = 0;
+    m_offsetLastDraw = 0;
 }
 
-void dynamicIndexEnd(int indexSize, int indexCountWritten)
+void DynamicIndexState::Unlock()
 {
-    s_index.EndRegion(indexSize, indexCountWritten);
+    GL3_ASSERT(m_data);
+    m_data = nullptr;
+
+    s_index.EndRegion(m_indexSize, m_offset);
 }
 
 }

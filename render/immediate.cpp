@@ -49,9 +49,6 @@ static GLenum s_primitive;
 static Vector4 s_currentColor;
 static Vector2 s_currentTexCoord;
 
-static DynamicVertexState s_vertexState;
-static DynamicIndexState s_indexState;
-
 class SpriteShader : public BaseShader
 {
 public:
@@ -94,7 +91,7 @@ static void Flush()
     GL3_ASSERT(s_vertexWriteCount == 0);
 
     int indexByteOffset;
-    int indexCount = s_indexState.UpdateDrawOffset(indexByteOffset);
+    int indexCount = g_dynamicIndexState.UpdateDrawOffset(indexByteOffset);
     if (!indexCount)
     {
         // FIXME: if lines are ever supported, this won't work as they're not indexed
@@ -117,11 +114,11 @@ void immediateDrawStart(bool alphaTest)
 
     GL3_ASSERT(s_vertexWriteCount == 0);
 
-    s_vertexState.Map(sizeof(ImmediateVertex));
-    s_indexState.Map(sizeof(GLushort));
+    g_dynamicVertexState.Lock(sizeof(ImmediateVertex));
+    g_dynamicIndexState.Lock(sizeof(GLushort));
 
-    commandBindVertexBuffer(s_vertexState.VertexBuffer(), s_vertexFormat);
-    commandBindIndexBuffer(s_indexState.IndexBuffer());
+    commandBindVertexBuffer(g_dynamicVertexState.VertexBuffer(), s_vertexFormat);
+    commandBindIndexBuffer(g_dynamicIndexState.IndexBuffer());
 
     SpriteShader &shader = alphaTest ? s_shaderAlphaTest : s_shader;
     commandUseProgram(&shader);
@@ -159,8 +156,8 @@ void immediateDrawEnd()
     GL3_ASSERT(s_state.active);
     s_state = {}; // FIXME: not necessarily needed
 
-    s_vertexState.Unmap();
-    s_indexState.Unmap();
+    g_dynamicVertexState.Unlock();
+    g_dynamicIndexState.Unlock();
 }
 
 bool immediateIsActive()
@@ -256,7 +253,7 @@ void immediateBegin(GLenum mode)
 
     s_primitive = mode;
     GL3_ASSERT(s_vertexWriteCount == 0);
-    s_vertexWrite = static_cast<ImmediateVertex *>(s_vertexState.BeginWrite());
+    s_vertexWrite = static_cast<ImmediateVertex *>(g_dynamicVertexState.BeginWrite());
 }
 
 void immediateColor4f(float r, float g, float b, float a)
@@ -292,31 +289,31 @@ void immediateEnd()
 {
     GL3_ASSERT(s_state.active);
 
-    GLushort indexBase = (GLushort)s_vertexState.IndexBase();
+    GLushort indexBase = (GLushort)g_dynamicVertexState.IndexBase();
 
-    int writeCount = 0;
-    GLushort *indices = static_cast<GLushort *>(s_indexState.BeginWrite());
+    GLushort *indices = static_cast<GLushort *>(g_dynamicIndexState.BeginWrite());
+    GLushort *index = indices;
 
     switch (s_primitive)
     {
     case GL_TRIANGLES:
-        for (GLushort i = 0; i < s_vertexWriteCount; i += 3)
+        for (GLushort i = 0; i < s_vertexWriteCount; i += 3, index += 3)
         {
-            indices[writeCount++] = indexBase + i;
-            indices[writeCount++] = indexBase + i + 1;
-            indices[writeCount++] = indexBase + i + 2;
+            index[0] = indexBase + i;
+            index[1] = indexBase + i + 1;
+            index[2] = indexBase + i + 2;
         }
         break;
 
     case GL_QUADS:
-        for (GLushort i = 0; i < s_vertexWriteCount; i += 4)
+        for (GLushort i = 0; i < s_vertexWriteCount; i += 4, index += 6)
         {
-            indices[writeCount++] = indexBase + i;
-            indices[writeCount++] = indexBase + i + 1;
-            indices[writeCount++] = indexBase + i + 2;
-            indices[writeCount++] = indexBase + i;
-            indices[writeCount++] = indexBase + i + 2;
-            indices[writeCount++] = indexBase + i + 3;
+            index[0] = indexBase + i;
+            index[1] = indexBase + i + 1;
+            index[2] = indexBase + i + 2;
+            index[3] = indexBase + i;
+            index[4] = indexBase + i + 2;
+            index[5] = indexBase + i + 3;
         }
         break;
 
@@ -325,9 +322,9 @@ void immediateEnd()
         break;
     }
 
-    s_indexState.FinishWrite(writeCount);
+    g_dynamicIndexState.FinishWrite(index - indices);
 
-    s_vertexState.FinishWrite(s_vertexWriteCount);
+    g_dynamicVertexState.FinishWrite(s_vertexWriteCount);
     s_vertexWriteCount = 0;
 }
 

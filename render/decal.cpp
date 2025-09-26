@@ -10,24 +10,18 @@ namespace Render
 
 // oversized on purpose
 constexpr int MaxDecals = 512;
-constexpr int MaxDecalIndices = MaxDecals * 6;
 
 struct DrawnDecal
 {
     GLuint texture;
-    int indexOffset;
-    int indexCount;
+    int indexBase;
+    int vertexCount;
 };
 
 static cvar_t *gl_polyoffset;
 
 static int s_decalCount;
 static DrawnDecal s_decals[MaxDecals];
-
-static DynamicVertexState s_vertexState;
-
-static int s_indexCount;
-static GLushort s_indexData[MaxDecalIndices];
 
 void decalInit()
 {
@@ -38,40 +32,25 @@ static void AddDecal(GLuint textureName, const gl3_brushvert_t *vertices, int ve
 {
     GL3_ASSERT(vertexCount >= 3);
 
-    // doing this on demand
-    if (!s_vertexState.IsMapped())
-    {
-        s_vertexState.Map(sizeof(gl3_brushvert_t));
-    }
-
     if (s_decalCount >= MaxDecals)
     {
         GL3_ASSERT(false);
         return;
     }
 
-    int indexCount = (vertexCount - 2) * 3;
-    if (s_indexCount + indexCount >= MaxDecalIndices)
+    // doing this on demand
+    if (!g_dynamicVertexState.IsLocked())
     {
-        GL3_ASSERT(false);
-        return;
+        g_dynamicVertexState.Lock(sizeof(gl3_brushvert_t));
     }
 
     DrawnDecal *decal = &s_decals[s_decalCount++];
     decal->texture = textureName;
-    decal->indexOffset = s_indexCount;
-    decal->indexCount = indexCount;
-
-    int indexBase = s_vertexState.IndexBase();
-    for (int j = 1; j < vertexCount - 1; j++)
-    {
-        s_indexData[s_indexCount++] = static_cast<GLushort>(indexBase);
-        s_indexData[s_indexCount++] = static_cast<GLushort>(indexBase + j);
-        s_indexData[s_indexCount++] = static_cast<GLushort>(indexBase + j + 1);
-    }
+    decal->indexBase = g_dynamicVertexState.IndexBase();
+    decal->vertexCount = vertexCount;
 
     // FIXME: check if this fits first....
-    s_vertexState.WriteData(vertices, vertexCount);
+    g_dynamicVertexState.Write(vertices, vertexCount);
 }
 
 void decalAddFromSurface(gl3_worldmodel_t *model, gl3_surface_t *surface)
@@ -119,40 +98,47 @@ void decalDrawAll(DynamicIndexState &indexState)
         return;
     }
 
-    // fucked: we're drawing after brush model surfaces, and the index buffer for that
-    // is still mapped so we can't map it here again... as a hacky workaround, write in
-    // between of the brush indices (this can potentially overflow...)
+    // done writing vertices at this point
+    g_dynamicVertexState.Unlock();
 
-    // FIXME: clean this up now that we support u16 indices for bmodels
-    if (indexState.IndexSize() == 4)
-    {
-        indexState.WriteData(s_indexData, ((s_indexCount + 1) / 2));
-    }
-    else
-    {
-        GL3_ASSERT(indexState.IndexSize() == 2);
-        indexState.WriteData(s_indexData, s_indexCount);
-    }
-
-    commandBindVertexBuffer(s_vertexState.VertexBuffer(), g_brushVertexFormat);
+    commandBindVertexBuffer(g_dynamicVertexState.VertexBuffer(), g_brushVertexFormat);
 
     commandBlendEnable(GL_TRUE);
     commandBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     commandDepthMask(GL_FALSE);
     commandPolygonOffset(-1.0f, -gl_polyoffset->value);
 
-    // we're only interested about the offset
-    int indexByteOffset;
-    (void)indexState.UpdateDrawOffset(indexByteOffset);
-
     for (int i = 0; i < s_decalCount; i++)
     {
         const DrawnDecal *decal = &s_decals[i];
+
+        int indexCount = 0;
+        int indexBase = decal->indexBase;
+        GLushort *indices = static_cast<GLushort *>(indexState.BeginWrite());
+
+        for (int j = 1; j < decal->vertexCount - 1; j++)
+        {
+            indices[indexCount++] = static_cast<GLushort>(indexBase);
+            indices[indexCount++] = static_cast<GLushort>(indexBase + j);
+            indices[indexCount++] = static_cast<GLushort>(indexBase + j + 1);
+        }
+
+        // index state might have 32-bit indices so we need to do this
+        if (indexState.IndexSize() == 4)
+        {
+            indexState.FinishWrite((indexCount + 1) / 2);
+        }
+        else
+        {
+            GL3_ASSERT(indexState.IndexSize() == 2);
+            indexState.FinishWrite(indexCount);
+        }
+
+        int indexByteOffset;
+        indexState.UpdateDrawOffset(indexByteOffset);
+
         commandBindTexture(0, GL_TEXTURE_2D, decal->texture);
-        commandDrawElements(GL_TRIANGLES,
-            decal->indexCount,
-            GL_UNSIGNED_SHORT,
-            indexByteOffset + (decal->indexOffset * sizeof(GLushort)));
+        commandDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_SHORT, indexByteOffset);
     }
 
     // FIXME: this can break water!!!!
@@ -161,9 +147,6 @@ void decalDrawAll(DynamicIndexState &indexState)
     commandDepthMask(GL_TRUE);
 
     s_decalCount = 0;
-    s_indexCount = 0;
-
-    s_vertexState.Unmap();
 }
 
 }
