@@ -7,6 +7,7 @@
     APIs: gl=3.1
     Profile: compatibility
     Extensions:
+        GL_ARB_draw_elements_base_vertex,
         GL_KHR_debug
     Loader: True
     Local files: False
@@ -14,9 +15,9 @@
     Reproducible: False
 
     Commandline:
-        --profile="compatibility" --api="gl=3.1" --generator="c" --spec="gl" --extensions="GL_KHR_debug"
+        --profile="compatibility" --api="gl=3.1" --generator="c" --spec="gl" --extensions="GL_ARB_draw_elements_base_vertex,GL_KHR_debug"
     Online:
-        https://glad.dav1d.de/#profile=compatibility&language=c&specification=gl&loader=on&api=gl%3D3.1&extensions=GL_KHR_debug
+        https://glad.dav1d.de/#profile=compatibility&language=c&specification=gl&loader=on&api=gl%3D3.1&extensions=GL_ARB_draw_elements_base_vertex&extensions=GL_KHR_debug
 */
 
 #include <stdio.h>
@@ -912,7 +913,12 @@ PFNGLWINDOWPOS3IPROC glad_glWindowPos3i = NULL;
 PFNGLWINDOWPOS3IVPROC glad_glWindowPos3iv = NULL;
 PFNGLWINDOWPOS3SPROC glad_glWindowPos3s = NULL;
 PFNGLWINDOWPOS3SVPROC glad_glWindowPos3sv = NULL;
+int GLAD_GL_ARB_draw_elements_base_vertex = 0;
 int GLAD_GL_KHR_debug = 0;
+PFNGLDRAWELEMENTSBASEVERTEXPROC glad_glDrawElementsBaseVertex = NULL;
+PFNGLDRAWRANGEELEMENTSBASEVERTEXPROC glad_glDrawRangeElementsBaseVertex = NULL;
+PFNGLDRAWELEMENTSINSTANCEDBASEVERTEXPROC glad_glDrawElementsInstancedBaseVertex = NULL;
+PFNGLMULTIDRAWELEMENTSBASEVERTEXPROC glad_glMultiDrawElementsBaseVertex = NULL;
 PFNGLDEBUGMESSAGECONTROLPROC glad_glDebugMessageControl = NULL;
 PFNGLDEBUGMESSAGEINSERTPROC glad_glDebugMessageInsert = NULL;
 PFNGLDEBUGMESSAGECALLBACKPROC glad_glDebugMessageCallback = NULL;
@@ -1614,6 +1620,13 @@ static void load_GL_VERSION_3_1(GLADloadproc load) {
 	glad_glBindBufferBase = (PFNGLBINDBUFFERBASEPROC)load("glBindBufferBase");
 	glad_glGetIntegeri_v = (PFNGLGETINTEGERI_VPROC)load("glGetIntegeri_v");
 }
+static void load_GL_ARB_draw_elements_base_vertex(GLADloadproc load) {
+	if(!GLAD_GL_ARB_draw_elements_base_vertex) return;
+	glad_glDrawElementsBaseVertex = (PFNGLDRAWELEMENTSBASEVERTEXPROC)load("glDrawElementsBaseVertex");
+	glad_glDrawRangeElementsBaseVertex = (PFNGLDRAWRANGEELEMENTSBASEVERTEXPROC)load("glDrawRangeElementsBaseVertex");
+	glad_glDrawElementsInstancedBaseVertex = (PFNGLDRAWELEMENTSINSTANCEDBASEVERTEXPROC)load("glDrawElementsInstancedBaseVertex");
+	glad_glMultiDrawElementsBaseVertex = (PFNGLMULTIDRAWELEMENTSBASEVERTEXPROC)load("glMultiDrawElementsBaseVertex");
+}
 static void load_GL_KHR_debug(GLADloadproc load) {
 	if(!GLAD_GL_KHR_debug) return;
 	glad_glDebugMessageControl = (PFNGLDEBUGMESSAGECONTROLPROC)load("glDebugMessageControl");
@@ -1641,6 +1654,7 @@ static void load_GL_KHR_debug(GLADloadproc load) {
 }
 static int find_extensionsGL(void) {
 	if (!get_exts()) return 0;
+	GLAD_GL_ARB_draw_elements_base_vertex = has_ext("GL_ARB_draw_elements_base_vertex");
 	GLAD_GL_KHR_debug = has_ext("GL_KHR_debug");
 	free_exts();
 	return 1;
@@ -1716,6 +1730,7 @@ int gladLoadGLLoader(GLADloadproc load) {
 	load_GL_VERSION_3_1(load);
 
 	if (!find_extensionsGL()) return 0;
+	load_GL_ARB_draw_elements_base_vertex(load);
 	load_GL_KHR_debug(load);
 	return GLVersion.major != 0 || GLVersion.minor != 0;
 }

@@ -7,6 +7,7 @@
     APIs: gl=3.1
     Profile: compatibility
     Extensions:
+        GL_ARB_draw_elements_base_vertex,
         GL_KHR_debug
     Loader: True
     Local files: False
@@ -14,9 +15,9 @@
     Reproducible: False
 
     Commandline:
-        --profile="compatibility" --api="gl=3.1" --generator="c" --spec="gl" --extensions="GL_KHR_debug"
+        --profile="compatibility" --api="gl=3.1" --generator="c" --spec="gl" --extensions="GL_ARB_draw_elements_base_vertex,GL_KHR_debug"
     Online:
-        https://glad.dav1d.de/#profile=compatibility&language=c&specification=gl&loader=on&api=gl%3D3.1&extensions=GL_KHR_debug
+        https://glad.dav1d.de/#profile=compatibility&language=c&specification=gl&loader=on&api=gl%3D3.1&extensions=GL_ARB_draw_elements_base_vertex&extensions=GL_KHR_debug
 */
 
 
@@ -3362,6 +3363,22 @@ GLAPI PFNGLUNIFORMBLOCKBINDINGPROC glad_glUniformBlockBinding;
 #define GL_STACK_OVERFLOW_KHR 0x0503
 #define GL_STACK_UNDERFLOW_KHR 0x0504
 #define GL_DISPLAY_LIST 0x82E7
+#ifndef GL_ARB_draw_elements_base_vertex
+#define GL_ARB_draw_elements_base_vertex 1
+GLAPI int GLAD_GL_ARB_draw_elements_base_vertex;
+typedef void (APIENTRYP PFNGLDRAWELEMENTSBASEVERTEXPROC)(GLenum mode, GLsizei count, GLenum type, const void *indices, GLint basevertex);
+GLAPI PFNGLDRAWELEMENTSBASEVERTEXPROC glad_glDrawElementsBaseVertex;
+#define glDrawElementsBaseVertex glad_glDrawElementsBaseVertex
+typedef void (APIENTRYP PFNGLDRAWRANGEELEMENTSBASEVERTEXPROC)(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices, GLint basevertex);
+GLAPI PFNGLDRAWRANGEELEMENTSBASEVERTEXPROC glad_glDrawRangeElementsBaseVertex;
+#define glDrawRangeElementsBaseVertex glad_glDrawRangeElementsBaseVertex
+typedef void (APIENTRYP PFNGLDRAWELEMENTSINSTANCEDBASEVERTEXPROC)(GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei instancecount, GLint basevertex);
+GLAPI PFNGLDRAWELEMENTSINSTANCEDBASEVERTEXPROC glad_glDrawElementsInstancedBaseVertex;
+#define glDrawElementsInstancedBaseVertex glad_glDrawElementsInstancedBaseVertex
+typedef void (APIENTRYP PFNGLMULTIDRAWELEMENTSBASEVERTEXPROC)(GLenum mode, const GLsizei *count, GLenum type, const void *const*indices, GLsizei drawcount, const GLint *basevertex);
+GLAPI PFNGLMULTIDRAWELEMENTSBASEVERTEXPROC glad_glMultiDrawElementsBaseVertex;
+#define glMultiDrawElementsBaseVertex glad_glMultiDrawElementsBaseVertex
+#endif
 #ifndef GL_KHR_debug
 #define GL_KHR_debug 1
 GLAPI int GLAD_GL_KHR_debug;

@@ -21,17 +21,25 @@ struct NameField
     uint16_t index; // indexes into s_caches
 };
 
-constexpr uint16_t NameFieldMagic = (0 << 0) | ('3' << 8);
+constexpr uint16_t NameFieldMagic = (0 << 0) | (3 << 8);
+
+struct StudioVertexFat
+{
+    Vector3 position;
+    Vector2 texCoord;
+    float bone;
+    Vector3 normal;
+};
 
 struct BuildBuffer
 {
     unsigned vertexCount;
-    StudioVertex *vertices;
+    StudioVertexFat *vertices;
     unsigned indexCount;
     GLuint *indices;
 };
 
-static void ParseTricmds(BuildBuffer *build,
+static unsigned ParseTricmds(BuildBuffer *build,
     short *tricmds,
     Vector3 *vertices,
     Vector3 *normals,
@@ -39,6 +47,9 @@ static void ParseTricmds(BuildBuffer *build,
     float s,
     float t)
 {
+    unsigned baseVertex = build->vertexCount;
+    unsigned startIndexCount = build->indexCount;
+
     while (1)
     {
         int value = *tricmds++;
@@ -58,7 +69,7 @@ static void ParseTricmds(BuildBuffer *build,
         unsigned offset = build->vertexCount;
         build->vertexCount += count;
 
-        StudioVertex *vert = &build->vertices[offset];
+        StudioVertexFat *vert = &build->vertices[offset];
 
         for (unsigned l = 0; l < count; l++)
         {
@@ -74,13 +85,14 @@ static void ParseTricmds(BuildBuffer *build,
             vert++;
         }
 
+        unsigned indexBase = offset - baseVertex;
         if (trifan)
         {
             for (unsigned i = 2; i < count; i++)
             {
-                build->indices[build->indexCount++] = offset;
-                build->indices[build->indexCount++] = offset + i - 1;
-                build->indices[build->indexCount++] = offset + i;
+                build->indices[build->indexCount++] = indexBase;
+                build->indices[build->indexCount++] = indexBase + i - 1;
+                build->indices[build->indexCount++] = indexBase + i;
             }
         }
         else
@@ -89,19 +101,71 @@ static void ParseTricmds(BuildBuffer *build,
             {
                 if (!(i % 2))
                 {
-                    build->indices[build->indexCount++] = offset + i - 2;
-                    build->indices[build->indexCount++] = offset + i - 1;
-                    build->indices[build->indexCount++] = offset + i;
+                    build->indices[build->indexCount++] = indexBase + i - 2;
+                    build->indices[build->indexCount++] = indexBase + i - 1;
+                    build->indices[build->indexCount++] = indexBase + i;
                 }
                 else
                 {
-                    build->indices[build->indexCount++] = offset + i - 1;
-                    build->indices[build->indexCount++] = offset + i - 2;
-                    build->indices[build->indexCount++] = offset + i;
+                    build->indices[build->indexCount++] = indexBase + i - 1;
+                    build->indices[build->indexCount++] = indexBase + i - 2;
+                    build->indices[build->indexCount++] = indexBase + i;
                 }
             }
         }
     }
+
+    unsigned meshVertexCount = build->vertexCount - baseVertex;
+    unsigned meshIndexCount = build->indexCount - startIndexCount;
+
+    // FIXME: why is this still in? doubt it'll improve performance, but profile and remove
+    if (meshVertexCount > 0 && meshIndexCount > 0)
+    {
+        std::vector<unsigned> remap(meshVertexCount);
+        size_t uniqueVertexCount = meshopt_generateVertexRemap(
+            remap.data(),
+            &build->indices[startIndexCount],
+            meshIndexCount,
+            &build->vertices[baseVertex],
+            meshVertexCount,
+            sizeof(StudioVertexFat));
+
+        std::vector<unsigned> remappedIndices(meshIndexCount);
+        meshopt_remapIndexBuffer(
+            remappedIndices.data(),
+            &build->indices[startIndexCount],
+            meshIndexCount,
+            remap.data());
+
+        std::vector<StudioVertexFat> remappedVertices(uniqueVertexCount);
+        meshopt_remapVertexBuffer(
+            remappedVertices.data(),
+            &build->vertices[baseVertex],
+            meshVertexCount,
+            sizeof(StudioVertexFat),
+            remap.data());
+
+        meshopt_optimizeVertexCache(
+            remappedIndices.data(),
+            remappedIndices.data(),
+            meshIndexCount,
+            uniqueVertexCount);
+
+        uniqueVertexCount = meshopt_optimizeVertexFetch(
+            remappedVertices.data(),
+            remappedIndices.data(),
+            meshIndexCount,
+            remappedVertices.data(),
+            uniqueVertexCount,
+            sizeof(StudioVertexFat));
+
+        memcpy(&build->vertices[baseVertex], remappedVertices.data(), uniqueVertexCount * sizeof(StudioVertexFat));
+        memcpy(&build->indices[startIndexCount], remappedIndices.data(), meshIndexCount * sizeof(unsigned));
+
+        build->vertexCount = baseVertex + (unsigned)uniqueVertexCount;
+    }
+
+    return baseVertex;
 }
 
 static int CountVertsTricmds(short *tricmds)
@@ -153,66 +217,6 @@ static int CountVerts(studiohdr_t *header)
     return total_verts;
 }
 
-#ifdef STUDIO_TANGENTS
-static void ComputeTangets(StudioVertex *vertices, int vertexCount, const uint32_t *indices, int indexCount)
-{
-    TempMemoryScope temp;
-    Vector3 *tangents = temp.AllocZero<Vector3>(vertexCount * 2);
-    Vector3 *bitangents = &tangents[vertexCount];
-
-    for (int i = 0; i < indexCount; i += 3)
-    {
-        uint32_t i0 = indices[i + 0];
-        uint32_t i1 = indices[i + 1];
-        uint32_t i2 = indices[i + 2];
-
-        const StudioVertex &v0 = vertices[i0];
-        const StudioVertex &v1 = vertices[i1];
-        const StudioVertex &v2 = vertices[i2];
-
-        Vector3 e1 = v1.position - v0.position;
-        Vector3 e2 = v2.position - v0.position;
-
-        float s1 = v1.texCoord[0] - v0.texCoord[0];
-        float s2 = v2.texCoord[0] - v0.texCoord[0];
-
-        float t1 = v1.texCoord[1] - v0.texCoord[1];
-        float t2 = v2.texCoord[1] - v0.texCoord[1];
-
-        Vector3 s = e2 * t1 - e1 * t2;
-        Vector3 t = e2 * s1 - e1 * s2;
-
-        if (Dot(Vector3::Cross(e2, e1), Vector3::Cross(t, s)) < 0)
-        {
-            s = -s;
-            t = -t;
-        }
-
-        tangents[i0] += s;
-        tangents[i1] += s;
-        tangents[i2] += s;
-
-        bitangents[i0] += t;
-        bitangents[i1] += t;
-        bitangents[i2] += t;
-    }
-
-    for (int i = 0; i < vertexCount; i++)
-    {
-        const Vector3 &normal = vertices[i].normal;
-        const Vector3 &tangent = tangents[i];
-        const Vector3 &bitangent = bitangents[i];
-
-        Vector3 orthogonalized = (tangent - normal * Dot(normal, tangent));
-        orthogonalized.Normalize();
-
-        float handedness = copysignf(1.0f, Dot(Vector3::Cross(normal, tangent), bitangent));
-
-        vertices[i].tangent = { orthogonalized, handedness };
-    }
-}
-#endif
-
 static void PackIndices(uint32_t *indices, unsigned count)
 {
     unsigned i = 0, j = 0;
@@ -230,6 +234,31 @@ static void PackIndices(uint32_t *indices, unsigned count)
     }
 }
 
+static void PackNormal(int8_t(&dest)[4], const Vector3 &source)
+{
+    dest[0] = (int8_t)Lerp(INT8_MIN, INT8_MAX, 0.5f + (source.x * 0.5f));
+    dest[1] = (int8_t)Lerp(INT8_MIN, INT8_MAX, 0.5f + (source.y * 0.5f));
+    dest[2] = (int8_t)Lerp(INT8_MIN, INT8_MAX, 0.5f + (source.z * 0.5f));
+    dest[3] = 0;
+}
+
+static void PackVertices(StudioVertexFat *source, int count)
+{
+    static_assert(sizeof(StudioVertex) < sizeof(StudioVertexFat), "wtf");
+    StudioVertex *dest = (StudioVertex *)source;
+
+    for (int i = 0; i < count; i++)
+    {
+        StudioVertexFat from = source[i];
+        StudioVertex &to = dest[i];
+
+        to.position = from.position;
+        to.texCoord = from.texCoord;
+        to.bone = from.bone;
+        PackNormal(to.normal, from.normal);
+    }
+}
+
 static void BuildStudioVertexBuffer(StudioCache *cache, model_t *model, studiohdr_t *header)
 {
     int total_verts = CountVerts(header);
@@ -238,7 +267,7 @@ static void BuildStudioVertexBuffer(StudioCache *cache, model_t *model, studiohd
 
     BuildBuffer build;
     build.vertexCount = 0;
-    build.vertices = temp.Alloc<StudioVertex>(total_verts);
+    build.vertices = temp.Alloc<StudioVertexFat>(total_verts);
     build.indexCount = 0;
     build.indices = temp.Alloc<GLuint>(total_verts * 3);
 
@@ -281,51 +310,29 @@ static void BuildStudioVertexBuffer(StudioCache *cache, model_t *model, studiohd
                 float t = 1.0f / (float)texture->height;
 
                 unsigned index_offset = build.indexCount;
-
-                ParseTricmds(&build, tricmds, vertices, normals, vertinfo, s, t);
+                unsigned baseVertex = ParseTricmds(&build, tricmds, vertices, normals, vertinfo, s, t);
 
                 StudioMesh *mem_mesh = &mem_model->meshes[k];
                 mem_mesh->indexOffset_notbytes = index_offset;
                 mem_mesh->indexCount = build.indexCount - index_offset;
+                mem_mesh->baseVertex = baseVertex;
             }
         }
     }
 
-    uint32_t *remap = temp.Alloc<uint32_t>(build.vertexCount);
-
-    // meshoptimizer is very fast, use it solely for deduplication so we can compute vertex tangets quicker
-    size_t vertexCount = meshopt_generateVertexRemap(
-        remap,
-        build.indices,
-        build.indexCount,
-        build.vertices,
-        build.vertexCount,
-        sizeof(StudioVertex));
-
-    uint32_t *indices = temp.Alloc<uint32_t>(build.indexCount);
-    meshopt_remapIndexBuffer(indices, build.indices, build.indexCount, remap);
-
-    StudioVertex *vertices = temp.Alloc<StudioVertex>(vertexCount);
-    meshopt_remapVertexBuffer(vertices, build.vertices, build.vertexCount, sizeof(StudioVertex), remap);
-
-#ifdef STUDIO_TANGENTS
-    ComputeTangets(vertices, vertexCount, indices, build.indexCount);
-#endif
+    // packing vertices afterwards
+    PackVertices(build.vertices, build.vertexCount);
 
     // why use u32 when u16 do trick..
-    cache->indexSize = (build.vertexCount > UINT16_MAX) ? 4 : 2;
-    if (cache->indexSize == 2)
-    {
-        PackIndices(indices, build.indexCount);
-    }
+    PackIndices(build.indices, build.indexCount);
 
     glGenBuffers(1, &cache->vertexBuffer);
     glBindBuffer(GL_ARRAY_BUFFER, cache->vertexBuffer);
-    glBufferData(GL_ARRAY_BUFFER, vertexCount * sizeof(StudioVertex), vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, build.vertexCount * sizeof(StudioVertex), build.vertices, GL_STATIC_DRAW);
 
     glGenBuffers(1, &cache->indexBuffer);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, cache->indexBuffer);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, build.indexCount * cache->indexSize, indices, GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, build.indexCount * sizeof(GLushort), build.indices, GL_STATIC_DRAW);
 }
 
 static void BuildStudioCache(StudioCache *cache, model_t *model, studiohdr_t *header)

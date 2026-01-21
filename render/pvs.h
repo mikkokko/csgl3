@@ -7,9 +7,7 @@ namespace Render
 struct gl3_leaf_t;
 struct gl3_node_t;
 
-// only for rendering: currently visible leaves that have visible geometry
-extern int g_pvsLeafCount;
-extern gl3_leaf_t *g_pvsLeaves[32768];
+extern int g_pvsFrame;
 
 // called from brush the renderer
 void pvsUpdate(const Vector3 &point);

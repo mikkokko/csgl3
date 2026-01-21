@@ -2,10 +2,18 @@ cmake_minimum_required(VERSION 3.13)
 
 project(render)
 
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN TRUE)
+
 if (MSVC)
     add_compile_options(/MP)
     add_compile_options(/W4 /wd4100)
-    add_compile_options(/arch:SSE2 /fp:fast)
+    add_compile_options(/arch:SSE2 /fp:fast /GS-)
+
+    #add_compile_options(/Zi)
+    #add_link_options(/DEBUG)
 
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 else()

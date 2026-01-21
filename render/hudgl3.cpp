@@ -2,6 +2,10 @@
 #include "hudgl3.h"
 #include "effects.h"
 
+#ifdef SCHIZO_DEBUG
+#define ENABLE_HUD
+#endif
+
 namespace Render
 {
 
@@ -65,7 +69,9 @@ static const char *PrettySize(int bytes)
 
     return buffer;
 }
+#endif
 
+#ifdef ENABLE_HUD
 static void DrawRenderHud(int screenWidth)
 {
     static int s_frameCount;
@@ -91,6 +97,7 @@ static void DrawRenderHud(int screenWidth)
     Q_sprintf(string, "[%s] %d FPS", g_state.active ? "GL3" : "GL1", s_lastFps);
     g_engfuncs.pfnDrawString(screenWidth - 256, 64, string, red, green, blue);
 
+#ifdef SCHIZO_DEBUG
     if (g_state.active)
     {
         int yoffset = 80;
@@ -114,6 +121,7 @@ static void DrawRenderHud(int screenWidth)
         Q_sprintf(string, "Command buffer size %d", g_state.commandBufferSize);
         g_engfuncs.pfnDrawString(screenWidth - 256, yoffset, string, red, green, blue);
     }
+#endif
 }
 #endif
 
@@ -127,7 +135,7 @@ void PreDrawHud()
 
 void PostDrawHud(int screenWidth, int screenHeight)
 {
-#ifdef SCHIZO_DEBUG
+#ifdef ENABLE_HUD
     DrawRenderHud(screenWidth);
  #endif
 

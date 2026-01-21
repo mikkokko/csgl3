@@ -6,7 +6,7 @@ namespace Render
 
 struct gl3_worldmodel_t;
 struct gl3_surface_t;
-class DynamicIndexState;
+struct gl3_brushvert_t;
 
 void decalInit();
 
@@ -15,7 +15,10 @@ void decalAddFromSurface(gl3_worldmodel_t *model, gl3_surface_t *surface);
 
 // draw the queued decals, called for each brush model
 // relies on state set by the brush renderer (shaders, etc.)
-void decalDrawAll(DynamicIndexState &indexState);
+int decalDrawAll(uint16_t *spanData, int spanOffsetBytes, int curIndexCount);
+
+// callback from internalSurfaceDecals
+void decalAdd(GLuint textureName, const gl3_brushvert_t *vertices, int vertexCount);
 
 }
 

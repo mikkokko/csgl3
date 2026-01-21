@@ -2,9 +2,68 @@
 #include "studio_misc.h"
 #include "brush.h" // worldmodel lightmap
 #include "internal.h"
+#include "lightstyle.h"
 
 namespace Render
 {
+
+// FIXME: dumb
+constexpr int MaxClientEntities = 1024;
+
+// in large levels, sampling lightmaps is relatively slow, especially now with bilinear filtering
+// in levels that use studio models as static props, it's obviously a complete waste of time
+// to recompute lighting every frame... to solve this i added a per entity lighting data cache
+// that only gets recomputed when the lighting conditions change
+
+enum LightingType
+{
+    LightingNormal,
+    LightingSky
+};
+
+struct NormalLighting
+{
+    LightmapSamples sample;
+    LightmapSamples intensity[4];
+};
+
+struct SkyLighting
+{
+    Vector3 color;
+};
+
+struct LightingData
+{
+    LightingType type;
+
+    union
+    {
+        NormalLighting normal;
+        SkyLighting sky;
+    } lighting;
+};
+
+struct LightingKey
+{
+    Vector3 origin;
+    uint16_t effects;
+    uint16_t model_flags;
+};
+
+struct LightingCache
+{
+    bool dirty{ true };
+
+    LightingKey key;
+    LightingData data;
+    Vector3 direction;
+};
+
+// updated from movevars
+static Vector3 s_skyColor;
+static Vector3 s_skyVec;
+
+static LightingCache s_lightingCache[MaxClientEntities]{};
 
 inline Vector3 AnimatePoint(const Vector3 &point)
 {
@@ -19,22 +78,10 @@ inline Vector3 AnimatePoint(const Vector3 &point)
 
 bool studioFrustumCull(cl_entity_t *entity, studiohdr_t *header)
 {
-    Vector3 mins, maxs;
-
-    if (!VectorIsZero(header->bbmin))
+    if (entity == g_engfuncs.GetViewModel())
     {
-        mins = entity->origin + header->bbmin;
-        maxs = entity->origin + header->bbmax;
-    }
-    else if (!VectorIsZero(header->min))
-    {
-        mins = entity->origin + header->min;
-        maxs = entity->origin + header->max;
-    }
-    else
-    {
-        mins = entity->origin + Vector3{ -16, -16, -16 };
-        maxs = entity->origin + Vector3{ 16, 16, 16 };
+        // no need to cull, and interferes with bbox visualization
+        return false;
     }
 
     if (entity->curstate.sequence >= header->numseq)
@@ -45,33 +92,163 @@ bool studioFrustumCull(cl_entity_t *entity, studiohdr_t *header)
     mstudioseqdesc_t *sequences = (mstudioseqdesc_t *)((byte *)header + header->seqindex);
     mstudioseqdesc_t *sequence = &sequences[entity->curstate.sequence];
 
+    Vector3 localMins, localMaxs;
+
+    // none of the fallback paths are realistically executed, but keep them in anyway
+    if (!VectorIsZero(sequence->bbmin))
+    {
+        localMins = sequence->bbmin;
+        localMaxs = sequence->bbmax;
+    }
+    else if (!VectorIsZero(header->bbmin))
+    {
+        localMins = header->bbmin;
+        localMaxs = header->bbmax;
+    }
+    else if (!VectorIsZero(header->min))
+    {
+        localMins = header->min;
+        localMaxs = header->max;
+    }
+    else
+    {
+        localMins = { -16, -16, -16 };
+        localMaxs = { 16, 16, 16 };
+    }
+
+    Vector3 mins{ FLT_MAX, FLT_MAX, FLT_MAX };
+    Vector3 maxs{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
+
     for (int i = 0; i < 8; i++)
     {
         Vector3 point;
-        point.x = (i & 1) ? sequence->bbmin.x : sequence->bbmax.x;
-        point.y = (i & 2) ? sequence->bbmin.y : sequence->bbmax.y;
-        point.z = (i & 4) ? sequence->bbmin.z : sequence->bbmax.z;
+        point.x = (i & 1) ? localMins.x : localMaxs.x;
+        point.y = (i & 2) ? localMins.y : localMaxs.y;
+        point.z = (i & 4) ? localMins.z : localMaxs.z;
 
-        point = AnimatePoint(point);
+        Vector3 worldPoint = AnimatePoint(point);
 
-        mins.x = Q_min(mins.x, point.x);
-        maxs.x = Q_max(maxs.x, point.x);
+        mins.x = Q_min(mins.x, worldPoint.x);
+        maxs.x = Q_max(maxs.x, worldPoint.x);
 
-        mins.y = Q_min(mins.y, point.y);
-        maxs.y = Q_max(maxs.y, point.y);
+        mins.y = Q_min(mins.y, worldPoint.y);
+        maxs.y = Q_max(maxs.y, worldPoint.y);
 
-        mins.z = Q_min(mins.z, point.z);
-        maxs.z = Q_max(maxs.z, point.z);
+        mins.z = Q_min(mins.z, worldPoint.z);
+        maxs.z = Q_max(maxs.z, worldPoint.z);
     }
 
-    // can't do this! need to do a coarse check like the engine does
-    //return g_state.viewFrustum.CullAABB(mins, maxs);
+    Vector3 center = (mins + maxs) * 0.5f;
+    Vector3 extents = (maxs - mins) * 0.5f;
 
-    gl3_plane_t plane{};
-    plane.normal = g_state.viewForward;
-    plane.dist = Dot(g_state.viewForward, g_state.viewOrigin);
-    plane.type = PLANE_Y | PLANE_ANYY;
-    return (BoxOnPlaneSide(mins, maxs, plane) == BopsBack);
+    return g_state.viewFrustum.CullBox(center, extents);
+}
+
+void studioUpdateSkyLight(const movevars_t *mv)
+{
+    Vector3 skyColor{ mv->skycolor_r, mv->skycolor_g, mv->skycolor_b };
+    Vector3 skyVec{ mv->skyvec_x, mv->skyvec_y, mv->skyvec_z };
+
+    if (s_skyColor == skyColor && s_skyVec == skyVec)
+    {
+        // no change
+        return;
+    }
+
+    s_skyColor = skyColor;
+    s_skyVec = skyVec;
+
+    // invalidate skylight caches
+    for (LightingCache &cache : s_lightingCache)
+    {
+        if (!cache.dirty && cache.data.type == LightingSky)
+        {
+            cache.dirty = true;
+        }
+    }
+}
+
+static void ComputeLightingForKey(Vector3 &direction, LightingData &result, const LightingKey &key)
+{
+    if (key.effects & EF_INVLIGHT)
+    {
+        direction = { 0, 0, 1 };
+    }
+    else
+    {
+        direction = { 0, 0, -1 };
+    }
+
+    Vector3 start = key.origin - direction * 8;
+
+    if (!VectorIsZero(s_skyColor))
+    {
+        Vector3 end = key.origin - (s_skyVec * 8192);
+
+        // no constant for this flag in the sdk (it's in gl_model.h)
+        if ((key.model_flags & 1024) || internalTraceLineToSky(g_worldmodel->engine_model, start, end))
+        {
+            result.type = LightingSky;
+            result.lighting.sky.color = s_skyColor;
+            direction = s_skyVec;
+            return;
+        }
+    }
+
+    result.type = LightingNormal;
+
+    // need to do this bullshit
+    Vector3 end = start + direction * 2048;
+    result.lighting.normal.sample = internalSampleLightmap(g_worldmodel->engine_model, start, end);
+
+    start.x -= 16;
+    start.y -= 16;
+    end.x -= 16;
+    end.y -= 16;
+    result.lighting.normal.intensity[0] = internalSampleLightmap(g_worldmodel->engine_model, start, end);
+
+    start.x += 32;
+    end.x += 32;
+    result.lighting.normal.intensity[1] = internalSampleLightmap(g_worldmodel->engine_model, start, end);
+
+    start.y += 32;
+    end.y += 32;
+    result.lighting.normal.intensity[2] = internalSampleLightmap(g_worldmodel->engine_model, start, end);
+
+    start.x -= 32;
+    end.x -= 32;
+    result.lighting.normal.intensity[3] = internalSampleLightmap(g_worldmodel->engine_model, start, end);
+}
+
+static const LightingData &GetCachedLightingData(Vector3 &out_direction, cl_entity_t *entity)
+{
+    LightingKey key;
+    key.origin = entity->origin;
+    key.effects = (uint16_t)entity->curstate.effects;
+    key.model_flags = (uint16_t)entity->model->flags;
+
+    int index = entity->index;
+    GL3_ASSERT(index >= 0 && index < MaxClientEntities);
+
+    LightingCache &cache = s_lightingCache[index];
+    if (!cache.dirty)
+    {
+        if (!memcmp(&cache.key, &key, sizeof(LightingKey)))
+        {
+            out_direction = cache.direction;
+            return cache.data;
+        }
+    }
+    else
+    {
+        cache.dirty = false;
+    }
+
+    cache.key = key;
+    ComputeLightingForKey(cache.direction, cache.data, cache.key);
+    out_direction = cache.direction;
+
+    return cache.data;
 }
 
 void studioDynamicLight(cl_entity_t *entity, alight_t *light)
@@ -90,64 +267,29 @@ void studioDynamicLight(cl_entity_t *entity, alight_t *light)
     }
 
     Vector3 direction;
-    if (entity->curstate.effects & EF_INVLIGHT)
+    const LightingData &data = GetCachedLightingData(direction, entity);
+
+    Vector3 color;
+
+    if (data.type == LightingSky)
     {
-        direction = { 0, 0, 1 };
+        color = data.lighting.sky.color;
     }
     else
     {
-        direction = { 0, 0, -1 };
-    }
+        color = lightstyleApply(data.lighting.normal.sample);
 
-    Vector3 start = entity->origin - direction * 8;
+        Vector3 sample2 = lightstyleApply(data.lighting.normal.intensity[0]);
+        float f1 = (sample2.x + sample2.y + sample2.z) / 768.0f;
 
-    colorVec sample{};
+        sample2 = lightstyleApply(data.lighting.normal.intensity[1]);
+        float f2 = (sample2.x + sample2.y + sample2.z) / 768.0f;
 
-    if (g_state.movevars->skycolor_r + g_state.movevars->skycolor_g + g_state.movevars->skycolor_b)
-    {
-        Vector3 end;
-        end.x = entity->origin.x - g_state.movevars->skyvec_x * 8192;
-        end.y = entity->origin.y - g_state.movevars->skyvec_y * 8192;
-        end.z = entity->origin.z - g_state.movevars->skyvec_z * 8192;
+        sample2 = lightstyleApply(data.lighting.normal.intensity[2]);
+        float f3 = (sample2.x + sample2.y + sample2.z) / 768.0f;
 
-        // no constant for this flag in the sdk (it's in gl_model.h)
-        if ((entity->model->flags & 1024) || internalTraceLineToSky(g_worldmodel->engine_model, start, end))
-        {
-            sample.r = (int)g_state.movevars->skycolor_r;
-            sample.g = (int)g_state.movevars->skycolor_g;
-            sample.b = (int)g_state.movevars->skycolor_b;
-            direction.x = g_state.movevars->skyvec_x;
-            direction.y = g_state.movevars->skyvec_y;
-            direction.z = g_state.movevars->skyvec_z;
-        }
-    }
-
-    if (!(sample.r + sample.g + sample.b))
-    {
-        Vector3 end = start + direction * 2048;
-        sample = internalSampleLightmap(g_worldmodel->engine_model, start, end);
-
-        start.x -= 16;
-        start.y -= 16;
-        end.x -= 16;
-        end.y -= 16;
-        colorVec sample2 = internalSampleLightmap(g_worldmodel->engine_model, start, end);
-        float f1 = (float)(sample2.r + sample2.g + sample2.b) / 768.0f;
-
-        start.x += 32;
-        end.x += 32;
-        sample2 = internalSampleLightmap(g_worldmodel->engine_model, start, end);
-        float f2 = (float)(sample2.r + sample2.g + sample2.b) / 768.0f;
-
-        start.y += 32;
-        end.y += 32;
-        sample2 = internalSampleLightmap(g_worldmodel->engine_model, start, end);
-        float f3 = (float)(sample2.r + sample2.g + sample2.b) / 768.0f;
-
-        start.x -= 32;
-        end.x -= 32;
-        sample2 = internalSampleLightmap(g_worldmodel->engine_model, start, end);
-        float f4 = (float)(sample2.r + sample2.g + sample2.b) / 768.0f;
+        sample2 = lightstyleApply(data.lighting.normal.intensity[3]);
+        float f4 = (sample2.x + sample2.y + sample2.z) / 768.0f;
 
         direction.x = f4 - f2 - f3 + f1;
         direction.y = f2 - f3 - f4 + f1;
@@ -156,20 +298,12 @@ void studioDynamicLight(cl_entity_t *entity, alight_t *light)
 
     if (entity->curstate.renderfx == kRenderFxLightMultiplier && entity->curstate.iuser4 != 10)
     {
-        float scale = (float)entity->curstate.iuser4 / 10.0f;
-        sample.r = (int)((float)sample.r * scale);
-        sample.g = (int)((float)sample.g * scale);
-        sample.b = (int)((float)sample.b * scale);
+        color *= ((float)entity->curstate.iuser4 / 10.0f);
     }
 
-    entity->cvFloorColor = sample;
+    entity->cvFloorColor = { (unsigned)color.x, (unsigned)color.y, (unsigned)color.z, 0 };
 
-    Vector3 color;
-    color.x = (float)sample.r;
-    color.y = (float)sample.g;
-    color.z = (float)sample.b;
-
-    float scale = static_cast<float>(Q_max(Q_max(sample.r, sample.g), sample.b));
+    float scale = Q_max(Q_max(color.x, color.y), color.z);
     if (!scale)
     {
         scale = 1;
@@ -177,10 +311,12 @@ void studioDynamicLight(cl_entity_t *entity, alight_t *light)
 
     direction *= scale;
 
+    float clientTime = g_engfuncs.GetClientTime();
+
     for (int i = 0; i < MAX_DLIGHTS; i++)
     {
         dlight_t *dlight = &g_dlights[i];
-        if (dlight->die < g_engfuncs.GetClientTime())
+        if (dlight->die < clientTime)
         {
             continue;
         }

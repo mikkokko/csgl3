@@ -6,8 +6,8 @@ layout(std140) uniform ModelConstants
     vec4 ambientAndShadeLight; // x = ambientlight, y = shadelight
     vec4 chromeOriginAndShellScale; // chrome origin (xyz) and glowshell scale (w)
 
-    vec4 elightPositions[STUDIO_MAX_ELIGHTS]; // 4th component stores radius^2
-    vec4 elightColors[STUDIO_MAX_ELIGHTS];
+    vec4 elightPositions[STUDIO_MAX_ELIGHTS];
+    vec4 elightColors[STUDIO_MAX_ELIGHTS]; // 4th component stores radius^2
 
     mat3x4 bones[MAX_SHADER_BONES];
 };

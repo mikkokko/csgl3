@@ -7,32 +7,6 @@ namespace Render
 // should be enough for anything except the torture maps
 constexpr int InitialBufferCapacity = 16834;
 
-constexpr unsigned MaxTextureUnits = 4;
-
-// shadowing state to reduce command buffer sizes, overhead is negligible
-struct ShadowState
-{
-    GLboolean blendEnable{ GL_FALSE };
-    GLenum blendSrc{};
-    GLenum blendDst{};
-
-    GLboolean depthTest{ GL_TRUE };
-    GLenum depthFunc{};
-    GLboolean depthMask{ GL_TRUE };
-
-    GLboolean cullFace{ GL_TRUE };
-
-    GLuint vertexBuffer{};
-    GLuint indexBuffer{};
-    const VertexFormat *vertexFormat{};
-
-    GLuint textureUnit{ ~0u };
-    GLuint texture2Ds[MaxTextureUnits]{};
-    GLuint textureCubeMaps[MaxTextureUnits]{};
-
-    BaseShader *shader{};
-};
-
 enum Command
 {
     CmdActiveTexture,
@@ -47,9 +21,7 @@ enum Command
     CmdDepthFunc,
     CmdDepthMask,
 
-    CmdDrawElements,
-
-    CmdDrawElements32,
+    CmdDrawElementsBaseVertex,
 
     CmdPolygonOffset,
     CmdUniform1f,
@@ -69,7 +41,8 @@ enum Command
     CmdCount
 };
 
-static ShadowState s_state;
+ShadowState g_shadowState;
+
 static bool s_recording;
 
 static size_t s_readOffset;
@@ -96,8 +69,6 @@ static void Resize()
     {
         platformError("Command buffer reallocation failed");
     }
-
-    g_engfuncs.Con_Printf("PERF WARNING: command buffer had to be resized\n");
 }
 
 void commandRecord()
@@ -113,7 +84,7 @@ void commandRecord()
 #endif
 
     // state reset
-    s_state = ShadowState{};
+    g_shadowState = ShadowState{};
 }
 
 template<class To, class From>
@@ -249,26 +220,14 @@ void commandExecute()
         }
         break;
 
-        case CmdDrawElements:
+        case CmdDrawElementsBaseVertex:
         {
             //GLenum mode = ReadWord<GLenum>();
             GLsizei count = ReadWord<GLsizei>();
             //GLenum type = ReadWord<GLenum>();
             GLsizei offset = ReadWord<GLsizei>();
-            glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(offset));
-#ifdef SCHIZO_DEBUG
-            g_state.drawcallCount++;
-#endif
-        }
-        break;
-
-        case CmdDrawElements32:
-        {
-            //GLenum mode = ReadWord<GLenum>();
-            GLsizei count = ReadWord<GLsizei>();
-            //GLenum type = ReadWord<GLenum>();
-            GLsizei offset = ReadWord<GLsizei>();
-            glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, reinterpret_cast<const void *>(offset));
+            GLint basevertex = ReadWord<GLint>();
+            glDrawElementsBaseVertex(GL_TRIANGLES, count, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(offset), basevertex);
 #ifdef SCHIZO_DEBUG
             g_state.drawcallCount++;
 #endif
@@ -330,7 +289,7 @@ void commandExecute()
                 const VertexAttrib &attrib = vertexAttribs[i];
 
                 glEnableVertexAttribArray(i);
-                glVertexAttribPointer(i, attrib.size, attrib.type, GL_FALSE, vertexStride, reinterpret_cast<void *>(static_cast<intptr_t>(attrib.offset)));
+                glVertexAttribPointer(i, attrib.size, attrib.type, attrib.normalized, vertexStride, reinterpret_cast<void *>(static_cast<intptr_t>(attrib.offset)));
             }
 
             GL3_ASSERT(i <= MaxVertexAttribs);
@@ -420,9 +379,9 @@ void commandBindTexture(GLuint unit, GLenum target, GLuint texture)
     GL3_ASSERT(s_recording);
     GL3_ASSERT(unit < MaxTextureUnits);
 
-    if (s_state.textureUnit != unit)
+    if (g_shadowState.textureUnit != unit)
     {
-        s_state.textureUnit = unit;
+        g_shadowState.textureUnit = unit;
         WriteWord(CmdActiveTexture);
         WriteWord(unit);
     }
@@ -430,18 +389,18 @@ void commandBindTexture(GLuint unit, GLenum target, GLuint texture)
     switch (target)
     {
     case GL_TEXTURE_2D:
-        if (s_state.texture2Ds[unit] != texture)
+        if (g_shadowState.texture2Ds[unit] != texture)
         {
-            s_state.texture2Ds[unit] = texture;
+            g_shadowState.texture2Ds[unit] = texture;
             WriteWord(CmdBindTexture2D);
             WriteWord(texture);
         }
         break;
 
     case GL_TEXTURE_CUBE_MAP:
-        if (s_state.textureCubeMaps[unit] != texture)
+        if (g_shadowState.textureCubeMaps[unit] != texture)
         {
-            s_state.textureCubeMaps[unit] = texture;
+            g_shadowState.textureCubeMaps[unit] = texture;
             WriteWord(CmdBindTextureCubeMap);
             WriteWord(texture);
         }
@@ -457,10 +416,10 @@ void commandBlendFunc(GLenum sfactor, GLenum dfactor)
 {
     GL3_ASSERT(s_recording);
 
-    if (s_state.blendSrc != sfactor || s_state.blendDst != dfactor)
+    if (g_shadowState.blendSrc != sfactor || g_shadowState.blendDst != dfactor)
     {
-        s_state.blendSrc = sfactor;
-        s_state.blendDst = dfactor;
+        g_shadowState.blendSrc = sfactor;
+        g_shadowState.blendDst = dfactor;
         WriteWord(CmdBlendFunc);
         WriteWord(sfactor);
         WriteWord(dfactor);
@@ -471,9 +430,9 @@ void commandDepthFunc(GLenum func)
 {
     GL3_ASSERT(s_recording);
 
-    if (s_state.depthFunc != func)
+    if (g_shadowState.depthFunc != func)
     {
-        s_state.depthFunc = func;
+        g_shadowState.depthFunc = func;
         WriteWord(CmdDepthFunc);
         WriteWord(func);
     }
@@ -483,9 +442,9 @@ void commandDepthMask(GLboolean flag)
 {
     GL3_ASSERT(s_recording);
 
-    if (s_state.depthMask != flag)
+    if (g_shadowState.depthMask != flag)
     {
-        s_state.depthMask = flag;
+        g_shadowState.depthMask = flag;
         WriteWord(CmdDepthMask);
         WriteWord((GLint)flag);
     }
@@ -495,9 +454,9 @@ void commandBlendEnable(GLboolean enable)
 {
     GL3_ASSERT(s_recording);
 
-    if (s_state.blendEnable != enable)
+    if (g_shadowState.blendEnable != enable)
     {
-        s_state.blendEnable = enable;
+        g_shadowState.blendEnable = enable;
         WriteWord(enable ? CmdBlendEnable : CmdBlendDisable);
     }
 }
@@ -506,9 +465,9 @@ void commandCullFace(GLboolean enable)
 {
     GL3_ASSERT(s_recording);
 
-    if (s_state.cullFace != enable)
+    if (g_shadowState.cullFace != enable)
     {
-        s_state.cullFace = enable;
+        g_shadowState.cullFace = enable;
         WriteWord(enable ? CmdCullFaceEnable : CmdCullFaceDisable);
     }
 }
@@ -517,24 +476,26 @@ void commandDepthTest(GLboolean enable)
 {
     GL3_ASSERT(s_recording);
 
-    if (s_state.depthTest != enable)
+    if (g_shadowState.depthTest != enable)
     {
-        s_state.depthTest = enable;
+        g_shadowState.depthTest = enable;
         WriteWord(enable ? CmdDepthTestEnable : CmdDepthTestDisable);
     }
 }
 
-void commandDrawElements(GLenum mode, GLsizei count, GLenum type, GLsizei offset)
+void commandDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, GLsizei offset, GLint basevertex)
 {
     GL3_ASSERT(s_recording);
     GL3_ASSERT(mode == GL_TRIANGLES);
-    GL3_ASSERT(type == GL_UNSIGNED_SHORT || type == GL_UNSIGNED_INT);
+    GL3_ASSERT(type == GL_UNSIGNED_SHORT);
+    GL3_ASSERT(basevertex >= 0);
 
-    WriteWord((type == GL_UNSIGNED_INT) ? CmdDrawElements32 : CmdDrawElements);
+    WriteWord(CmdDrawElementsBaseVertex);
     //WriteWord(mode);
     WriteWord(count);
     //WriteWord(type);
     WriteWord(offset);
+    WriteWord(basevertex);
 }
 
 void commandPolygonOffset(GLfloat factor, GLfloat units)
@@ -549,7 +510,7 @@ void commandPolygonOffset(GLfloat factor, GLfloat units)
 void commandUniform1f(GLint location, GLfloat v0)
 {
     GL3_ASSERT(s_recording);
-    GL3_ASSERT(s_state.shader);
+    GL3_ASSERT(g_shadowState.shader);
 
     if (location == -1)
     {
@@ -557,7 +518,7 @@ void commandUniform1f(GLint location, GLfloat v0)
         return;
     }
 
-    UniformValue &value = s_state.shader->m_uniformState[location];
+    UniformValue &value = g_shadowState.shader->m_uniformState[location];
     if (value.float_ != v0)
     {
         value.float_ = v0;
@@ -570,7 +531,7 @@ void commandUniform1f(GLint location, GLfloat v0)
 void commandUniform1i(GLint location, GLint v0)
 {
     GL3_ASSERT(s_recording);
-    GL3_ASSERT(s_state.shader);
+    GL3_ASSERT(g_shadowState.shader);
 
     if (location == -1)
     {
@@ -578,7 +539,7 @@ void commandUniform1i(GLint location, GLint v0)
         return;
     }
 
-    UniformValue &value = s_state.shader->m_uniformState[location];
+    UniformValue &value = g_shadowState.shader->m_uniformState[location];
     if (value.int_ != v0)
     {
         value.int_ = v0;
@@ -592,9 +553,9 @@ void commandUseProgram(BaseShader *shader)
 {
     GL3_ASSERT(s_recording);
 
-    if (s_state.shader != shader)
+    if (g_shadowState.shader != shader)
     {
-        s_state.shader = shader;
+        g_shadowState.shader = shader;
         WriteWord(CmdUseProgram);
         WriteWord(shader->m_program);
     }
@@ -602,9 +563,9 @@ void commandUseProgram(BaseShader *shader)
 
 void commandBindIndexBuffer(GLuint buffer)
 {
-    if (s_state.indexBuffer != buffer)
+    if (g_shadowState.indexBuffer != buffer)
     {
-        s_state.indexBuffer = buffer;
+        g_shadowState.indexBuffer = buffer;
         WriteWord(CmdBindIndexBuffer);
         WriteWord(buffer);
     }
@@ -612,10 +573,10 @@ void commandBindIndexBuffer(GLuint buffer)
 
 void commandBindVertexBuffer(GLuint buffer, const VertexFormat &format)
 {
-    if (s_state.vertexBuffer != buffer || s_state.vertexFormat != &format)
+    if (g_shadowState.vertexBuffer != buffer || g_shadowState.vertexFormat != &format)
     {
-        s_state.vertexBuffer = buffer;
-        s_state.vertexFormat = &format;
+        g_shadowState.vertexBuffer = buffer;
+        g_shadowState.vertexFormat = &format;
         WriteWord(CmdBindVertexBuffer);
         WriteWord(buffer);
         WriteWord(&format);

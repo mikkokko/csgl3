@@ -11,8 +11,7 @@ enum
     SURF_BACK = (1 << 1),
     SURF_SKY = (1 << 2),
     SURF_WATER = (1 << 4),
-    SURF_SCROLL = (1 << 5),
-    SURF_UNDERWATER = (1 << 7)
+    SURF_SCROLL = (1 << 5)
 };
 
 // must match the engine
@@ -28,10 +27,6 @@ struct gl3_plane_t
     Vector3 normal;
     float dist;
     int type;
-
-    // temp slop for testing cpu backface culling
-    int cullframe;
-    bool cullside;
 };
 
 struct gl3_texture_t
@@ -40,7 +35,12 @@ struct gl3_texture_t
     unsigned int width;
     unsigned int height;
     int gl_texturenum;
-    gl3_surface_t *texturechain;
+
+    int numdrawsurfaces;
+    gl3_surface_t **drawsurfaces;
+    int surfflags; // msurface_t flags that only change per texture
+    int basevertex;
+
     int anim_total;
     int anim_min;
     int anim_max;
@@ -52,45 +52,51 @@ struct gl3_node_t
 {
     int contents;
     int pvsframe;
-    Vector3 mins;
-    Vector3 maxs;
+    Vector3 center;
+    Vector3 extents;
     gl3_node_t *parent;
+    bool has_visible_surfaces;
 
     gl3_plane_t *plane;
     gl3_node_t *children[2];
+
+    int firstsurface;
+    int numsurfaces;
 };
 
 struct gl3_leaf_t
 {
     int contents;
     int pvsframe;
-    Vector3 mins;
-    Vector3 maxs;
+    Vector3 center;
+    Vector3 extents;
     gl3_node_t *parent;
+    bool has_visible_surfaces;
 
     byte *compressed_vis;
-    gl3_surface_t **firstmarksurface;
+    int *firstmarksurface;
     int nummarksurfaces;
-
-    bool has_visible_surfaces;
 };
 
 struct gl3_surface_t
 {
-    int visframe;
-    gl3_plane_t *plane;
-
     int flags;
+    gl3_texture_t *texture;
 
     int firstvert;
     int numverts;
 
-    gl3_surface_t *texturechain;
-    gl3_texture_t *texture;
-    byte styles[MAXLIGHTMAPS];
+    gl3_plane_t *plane;
+};
 
-    // redundant bloat added for lightmap packing so
-    // it doesn't depend on internal engine structures
+// separate struct made for lightmap packing so
+// it doesn't depend on internal engine structures
+// also used by decal code when computing lightmap texcoords
+struct gl3_fatsurface_t
+{
+    int firstvert;
+    int numverts;
+
     int lightmap_width;
     int lightmap_height;
     Color24 *lightmap_data;
@@ -98,16 +104,28 @@ struct gl3_surface_t
 
     // ugh... added for decals
     int lightmap_x, lightmap_y;
-
-    int numindices;
-    void *indices;
+    byte styles[MAXLIGHTMAPS];
 };
+
+inline uint16_t STORE_U16(float flt)
+{
+    flt = Q_max(flt, 0.0f);
+    GL3_ASSERT(flt >= 0.0f && flt <= (float)UINT16_MAX);
+    return (uint16_t)flt;
+}
+
+inline uint16_t PACK_U16(float flt)
+{
+    GL3_ASSERT(flt >= 0.0f && flt <= 1.0f);
+    return (uint16_t)(Lerp(0, UINT16_MAX, flt));
+}
 
 struct gl3_brushvert_t
 {
     // lightmap width is stored in a_position.w
     Vector4 position;
-    Vector4 texCoord;
+    Vector2 texCoord;
+    uint16_t lightmapTexCoord[2];
     uint8_t styles[4];
 };
 
@@ -129,6 +147,7 @@ struct gl3_worldmodel_t
 
     int numsurfaces;
     gl3_surface_t *surfaces;
+    gl3_fatsurface_t *fatsurfaces;
 
     int nummarksurfaces;
     gl3_surface_t **marksurfaces;
@@ -142,9 +161,11 @@ struct gl3_worldmodel_t
     GLuint lightmap_texture;
     int lightmap_width, lightmap_height;
 
-    // 2 or 4, use u16 indices if possible to
-    // halve the dynamic index buffer size
-    int index_size;
+    // max amount of indices world geometry and all inline models may have
+    int max_index_count;
+
+    // max amount of indices a single inline model may have
+    int max_submodel_index_count;
 };
 
 // for sky and friends

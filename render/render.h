@@ -70,7 +70,7 @@ extern cvar_t *r_fullbright;
 extern cvar_t *v_direct;
 extern cvar_t *gl_spriteblend;
 
-void renderFogEnable(bool enable);
+void renderFogEnable(bool enable, bool forceUpdate = false);
 
 }
 

@@ -20,6 +20,7 @@
 #include "hudgl3.h"
 #include "screenfadegl3.h"
 #include "particle.h"
+#include "studio_misc.h"
 
 extern "C" void HUD_DrawNormalTriangles();
 extern "C" void HUD_DrawTransparentTriangles();
@@ -95,8 +96,8 @@ static cvar_t *gl_widescreen_yfov;
 // need to do this due to our dynamic buffer system...
 // upload fog and non-fog constant buffers, switch between them with
 // VSSetConstantBuffers if we want to disable fog for some of the objects
-static bool s_sceneHasFog, s_fogConstantsSet;
-BufferSpan s_fogConstants, s_noFogConstants;
+static bool s_fogConstantsEnabled;
+BufferSpan s_fogConstants[2];
 
 void ModifyEngfuncs(cl_enginefunc_t *engfuncs)
 {
@@ -210,6 +211,11 @@ void Initialize(struct engine_studio_api_s *studio, r_studio_interface_s **pinte
     if (!GLAD_GL_VERSION_3_1)
     {
         platformError("OpenGL 3.1 required, current context is %d.%d", GLVersion.major, GLVersion.minor);
+    }
+
+    if (!GLAD_GL_ARB_draw_elements_base_vertex)
+    {
+        platformError("ARB_draw_elements_base_vertex required");
     }
 
     // calls platformError on failure
@@ -357,6 +363,9 @@ int BeginFrame()
 
     CheckLevelChange();
 
+    // clear entities from the previous frame
+    entityClearBuckets();
+
     return true;
 }
 
@@ -449,32 +458,27 @@ static void UpdateFrameConstants(const Matrix4 &vmViewProjectionMatrix)
     frameConstants.clientTime.x = g_engfuncs.GetClientTime();
 
     BufferSpan span = dynamicUniformData(&frameConstants, sizeof(frameConstants));
-    commandBindUniformBuffer(0, span.buffer, span.offset, sizeof(frameConstants));
+    commandBindUniformBuffer(0, span.buffer, span.byteOffset, sizeof(frameConstants));
 }
 
-void renderFogEnable(bool enable)
+void renderFogEnable(bool enable, bool forceUpdate)
 {
-    if (!s_sceneHasFog)
+    if (enable && !g_state.sceneHasFog)
     {
-        // not relevant
-        return;
+        enable = false;
     }
 
-    if (s_fogConstantsSet == enable)
+    if (!forceUpdate && s_fogConstantsEnabled == enable)
     {
         // no change
         return;
     }
 
-    s_fogConstantsSet = enable;
-    if (enable)
-    {
-        commandBindUniformBuffer(2, s_fogConstants.buffer, s_fogConstants.offset, sizeof(FogConstants));
-    }
-    else
-    {
-        commandBindUniformBuffer(2, s_noFogConstants.buffer, s_noFogConstants.offset, sizeof(FogConstants));
-    }
+    s_fogConstantsEnabled = enable;
+
+    const BufferSpan &constants = s_fogConstants[enable];
+    GL3_ASSERT(constants.buffer && constants.data);
+    commandBindUniformBuffer(2, constants.buffer, constants.byteOffset, sizeof(FogConstants));
 }
 
 static float WaterFogDensity(float linearEnd)
@@ -485,19 +489,12 @@ static float WaterFogDensity(float linearEnd)
 
 static void UpdateFogConstants()
 {
-    // this path will still go through the fog function, set values so that the fog will not be visible
     FogConstants noFogConstants;
     noFogConstants.fogColor = { 0.0f, 1.0f, 0.0f, 1.0f };
     noFogConstants.fogParams = { 1.0f, 1.0f, 0.0f, 0.0f };
-    s_noFogConstants = dynamicUniformData(&noFogConstants, sizeof(FogConstants));
+    s_fogConstants[false] = dynamicUniformData(&noFogConstants, sizeof(FogConstants));
 
-    s_sceneHasFog = g_state.sceneHasFog;
-    if (!s_sceneHasFog)
-    {
-        // no need to setup the fog variant
-        commandBindUniformBuffer(2, s_noFogConstants.buffer, s_noFogConstants.offset, sizeof(FogConstants));
-    }
-    else
+    if (g_state.sceneHasFog)
     {
         Vector3 fogColor;
         float fogDensity;
@@ -524,12 +521,12 @@ static void UpdateFogConstants()
         FogConstants fogConstants;
         fogConstants.fogColor = { fogColor, 1.0f };
         fogConstants.fogParams = { param, fogSkybox ? 0.0f : 1.0f, 0.0f, 0.0f };
-        s_fogConstants = dynamicUniformData(&fogConstants, sizeof(FogConstants));
-
-        commandBindUniformBuffer(2, s_fogConstants.buffer, s_fogConstants.offset, sizeof(FogConstants));
+        s_fogConstants[true] = dynamicUniformData(&fogConstants, sizeof(FogConstants));
     }
 
-    s_fogConstantsSet = s_sceneHasFog;
+    // if the level has fog, we start with fog enabled
+    // otherwise we'll go with no fog
+    renderFogEnable(g_state.sceneHasFog, true);
 }
 
 static void ViewModelProjectionMatrix(Matrix4 &matrix, float fovScale, float aspect)
@@ -619,12 +616,6 @@ static void SceneRenderPass(const SceneParams &params, bool onlyClientDraw)
 {
     SetupViewport(params);
 
-    if (!onlyClientDraw)
-    {
-        // animate the viewmodel
-        entityPreDrawViewmodel();
-    }
-
     entitySortTranslucents(params.origin);
 
     lightstyleUpdate();
@@ -633,6 +624,9 @@ static void SceneRenderPass(const SceneParams &params, bool onlyClientDraw)
 
     if (!onlyClientDraw)
     {
+        // animate the viewmodel, draw last
+        entityDrawViewmodel(STUDIO_EVENTS);
+
         // draw world and solid brush entities
         entityDrawSolidBrushes();
 
@@ -667,8 +661,9 @@ static void SceneRenderPass(const SceneParams &params, bool onlyClientDraw)
     {
         particleDraw();
 
-        // draw the viewmodel last
-        entityDrawViewmodel();
+        // draw the viewmodel last, can't draw it first
+        // even though it covers a large part of the screen
+        entityDrawViewmodel(STUDIO_RENDER);
     }
 
     // check errors before draw calls...
@@ -702,6 +697,9 @@ void RenderScene(const Params &params)
         g_state.movevars = refParams->movevars;
         g_state.crosshairAngle = refParams->crosshairangle;
         g_state.inWater = refParams->waterlevel > 2;
+
+        // update movevars for studio model lighting
+        studioUpdateSkyLight(refParams->movevars);
     }
 
     // update the skybox texture if it has changed
@@ -734,9 +732,6 @@ void RenderScene(const Params &params)
     {
         screenFadeDraw();
     }
-
-    // do this after the final pass
-    entityClearBuckets();
 
     // back to fixed function
     RestoreState();

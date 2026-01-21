@@ -80,7 +80,7 @@ void entitySortTranslucents(const Vector3 &cameraPosition)
 #endif
 }
 
-static void DrawViewmodel(bool actuallyDraw)
+void entityDrawViewmodel(int drawFlags)
 {
     // FIXME: r_drawviewmodel and others...
     cl_entity_t *viewmodel = g_engfuncs.GetViewModel();
@@ -102,20 +102,10 @@ static void DrawViewmodel(bool actuallyDraw)
 
         internalUpdateViewmodelAnimation(viewmodel);
 
-        studioProxyDrawEntity(actuallyDraw ? STUDIO_RENDER : STUDIO_EVENTS, viewmodel, 1);
+        studioProxyDrawEntity(drawFlags, viewmodel, 1);
 
         studioEndModels();
     }
-}
-
-void entityPreDrawViewmodel()
-{
-    DrawViewmodel(false);
-}
-
-void entityDrawViewmodel()
-{
-    DrawViewmodel(true);
 }
 
 static int ComputeRenderFx(cl_entity_t *entity, const Vector3 &origin, const Vector3 &forward)

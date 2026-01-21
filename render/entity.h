@@ -16,11 +16,8 @@ void entityDrawSolidEntities();
 // draw all translucent models
 void entityDrawTranslucentEntities(const Vector3 &origin, const Vector3 &forward);
 
-// jesus christ
-void entityPreDrawViewmodel();
-
 // draw the viewmodel, done last
-void entityDrawViewmodel();
+void entityDrawViewmodel(int drawFlags);
 
 // clears all entities marked to draw this frame
 void entityClearBuckets();

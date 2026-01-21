@@ -3,7 +3,8 @@
 
 // note: lightmap width is stored in a_position.w (temp test)
 in vec4 a_position;
-in vec4 a_texCoord;
+in vec2 a_texCoord;
+in vec2 a_lightmapTexCoord;
 in vec4 a_styles;
 
 uniform float u_scroll;
@@ -18,7 +19,7 @@ out float f_fogFactor;
 
 void main()
 {
-    texCoord = a_texCoord;
+    texCoord = vec4(a_texCoord, a_lightmapTexCoord);
     texCoord.x += u_scroll;
 
 #if !NO_LIGHTING

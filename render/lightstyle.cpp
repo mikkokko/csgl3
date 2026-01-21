@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "lightstyle.h"
+#include "internal.h" //LightmapSample... should be moved elsewhere
 
 namespace Render
 {
@@ -47,6 +48,31 @@ void lightstyleReset()
     {
         g_lightstyles[i] = (264.0f / 255.0f);
     }
+}
+
+Vector3 lightstyleApply(const LightmapSamples &samples)
+{
+    Vector3 result{};
+
+    for (int j = 0; j < MAXLIGHTMAPS; j++)
+    {
+        int style = samples.samples[j].style;
+        if (style >= MAX_LIGHTSTYLES)
+        {
+            break;
+        }
+
+        float weight = g_lightstyles[style];
+        result.x += samples.samples[j].r * weight;
+        result.y += samples.samples[j].g * weight;
+        result.z += samples.samples[j].b * weight;
+    }
+
+    result.x = Q_min(result.x, 255.0f);
+    result.y = Q_min(result.y, 255.0f);
+    result.z = Q_min(result.z, 255.0f);
+
+    return result;
 }
 
 }

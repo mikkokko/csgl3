@@ -20,7 +20,7 @@ struct LightmapRect
     int w, h, x, y;
 };
 
-static void CopyLightmapToAtlas(const gl3_surface_t &surface, int style, Color32 *atlas, int atlasWidth)
+static void CopyLightmapToAtlas(const gl3_fatsurface_t &surface, int style, Color32 *atlas, int atlasWidth)
 {
     GL3_ASSERT(surface.styles[style] != NULL_LIGHTSTYLE);
     GL3_ASSERT(surface.lightmap_data);
@@ -40,7 +40,7 @@ static void CopyLightmapToAtlas(const gl3_surface_t &surface, int style, Color32
     }
 }
 
-static void CopyLightmapsToAtlas(const gl3_surface_t &surface, int x, int y, Color32 *atlas, int atlasWidth)
+static void CopyLightmapsToAtlas(const gl3_fatsurface_t &surface, int x, int y, Color32 *atlas, int atlasWidth)
 {
     int width = surface.lightmap_width;
 
@@ -140,7 +140,7 @@ static void GetSortedLightmapRects(gl3_worldmodel_t *model, LightmapRect *rects,
 
     for (int i = 0; i < model->numsurfaces; i++)
     {
-        gl3_surface_t &surface = model->surfaces[i];
+        gl3_fatsurface_t &surface = model->fatsurfaces[i];
         if (!surface.numverts)
         {
             continue;
@@ -198,7 +198,7 @@ GLuint lightmapCreateAtlas(gl3_worldmodel_t *model, gl3_brushvert_t *vertices)
     for (int i = 0; i < rectCount; i++)
     {
         LightmapRect &rect = rects[i];
-        gl3_surface_t &surface = model->surfaces[rect.surfaceIndex];
+        gl3_fatsurface_t &surface = model->fatsurfaces[rect.surfaceIndex];
 
         surface.lightmap_x = rect.x;
         surface.lightmap_y = rect.y;
@@ -213,8 +213,8 @@ GLuint lightmapCreateAtlas(gl3_worldmodel_t *model, gl3_brushvert_t *vertices)
 
             vertex->position.w = lightmap_width;
 
-            vertex->texCoord.z = (vertex->texCoord.z + (surface.lightmap_x * 16) + 8) / (atlasWidth * 16);
-            vertex->texCoord.w = (vertex->texCoord.w + (surface.lightmap_y * 16) + 8) / (atlasHeight * 16);
+            vertex->lightmapTexCoord[0] = PACK_U16((float)(vertex->lightmapTexCoord[0] + (surface.lightmap_x * 16) + 8) / (atlasWidth * 16));
+            vertex->lightmapTexCoord[1] = PACK_U16((float)(vertex->lightmapTexCoord[1] + (surface.lightmap_y * 16) + 8) / (atlasHeight * 16));
         }
     }
 

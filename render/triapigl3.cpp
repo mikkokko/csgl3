@@ -6,6 +6,7 @@
 #include "brush.h"
 #include "internal.h"
 #include "hudgl3.h"
+#include "lightstyle.h"
 
 namespace Render
 {
@@ -317,11 +318,11 @@ static void LightAtPoint(float *pos, float *value)
     Vector3 end = pos;
     end.z -= 2048.0f;
 
-    colorVec result = internalSampleLightmap(g_worldmodel->engine_model, pos, end);
+    Vector3 result = lightstyleApply(internalSampleLightmap(g_worldmodel->engine_model, pos, end));
 
-    value[0] = (float)result.r;
-    value[1] = (float)result.g;
-    value[2] = (float)result.b;
+    value[0] = result.x;
+    value[1] = result.y;
+    value[2] = result.z;
 }
 
 static void Color4fRendermode(float r, float g, float b, float a, int rendermode)

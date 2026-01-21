@@ -26,8 +26,8 @@ struct StudioContext
     Vector3 lightvec;
 
     int elightCount;
-    Vector4 elightPositions[STUDIO_MAX_ELIGHTS]; // 4th component stores radius^2
-    Vector3 elightColors[STUDIO_MAX_ELIGHTS];
+    Vector3 elightPositions[STUDIO_MAX_ELIGHTS];
+    Vector4 elightColors[STUDIO_MAX_ELIGHTS]; // 4th component stores radius^2
 
     // FIXME: reconsider
     int rendermode;

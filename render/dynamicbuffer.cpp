@@ -21,6 +21,10 @@ class DynamicBuffer
     int m_offset{};
     GLBuffer m_buffers[BufferCount]{};
 
+#ifdef SCHIZO_DEBUG
+    bool m_writingRegion{};
+#endif
+
 public:
     DynamicBuffer(GLenum target, const int byteSize)
         : m_target{ target }
@@ -91,36 +95,15 @@ public:
         m_offset = 0;
     }
 
-    BufferSpan Upload(int index, const void *data, int size, int alignment)
+    BufferSpan BeginRegion(int index, int maxSize, int alignment)
     {
+#ifdef SCHIZO_DEBUG
+        GL3_ASSERT(!m_writingRegion);
+        m_writingRegion = true;
+#endif
+
         m_offset = AlignUp(m_offset, alignment);
-
-        if (m_offset + size > m_bufferSize)
-        {
-            platformError("Dynamic GPU buffer overflow");
-        }
-
-        GLBuffer &buffer = m_buffers[index];
-
-        GL3_ASSERT(buffer.mapped);
-        memcpy(&buffer.mapped[m_offset], data, size);
-
-        BufferSpan span;
-        span.buffer = buffer.handle;
-        span.offset = m_offset;
-
-        m_offset += size;
-
-        return span;
-    }
-
-    BufferSpan BeginRegion(int index, int elementSize, int &maxElementCount)
-    {
-        m_offset = AlignUp(m_offset, elementSize);
-
-        int availableBytes = m_bufferSize - m_offset;
-        maxElementCount = availableBytes / elementSize;
-        if (maxElementCount <= 0)
+        if (m_offset + maxSize > m_bufferSize)
         {
             platformError("Dynamic GPU buffer overflow");
         }
@@ -129,19 +112,22 @@ public:
 
         BufferSpan span;
         span.buffer = buffer.handle;
-        span.offset = m_offset;
-        span.pinned = &buffer.mapped[m_offset];
+        span.byteOffset = m_offset;
+        span.data = &buffer.mapped[m_offset];
 
         return span;
     }
 
-    void EndRegion(int elementSize, int elementCount)
+    void EndRegion(int finalSize)
     {
+#ifdef SCHIZO_DEBUG
+        GL3_ASSERT(m_writingRegion);
+        m_writingRegion = false;
+#endif
+
         // m_offset was aligned by BeginRegion
-        int bytesWritten = elementCount * elementSize;
-        GL3_ASSERT((m_offset % elementSize) == 0);
-        GL3_ASSERT(m_offset + bytesWritten <= m_bufferSize);
-        m_offset += bytesWritten;
+        GL3_ASSERT(m_offset + finalSize <= m_bufferSize);
+        m_offset += finalSize;
     }
 };
 
@@ -150,12 +136,9 @@ static int s_bufferFrame;
 
 static int s_uniformBufferOffsetAlignment;
 
-static DynamicBuffer s_vertex{ GL_ARRAY_BUFFER, 1 << 18 };
+static DynamicBuffer s_vertex{ GL_ARRAY_BUFFER, 1 << 19 };
 static DynamicBuffer s_index{ GL_ELEMENT_ARRAY_BUFFER, 1 << 19 };
 static DynamicBuffer s_uniform{ GL_UNIFORM_BUFFER, 1 << 17 };
-
-DynamicVertexState g_dynamicVertexState;
-DynamicIndexState g_dynamicIndexState;
 
 void dynamicBuffersInit()
 {
@@ -181,54 +164,32 @@ void dynamicBuffersUnmap()
     s_bufferFrame = (s_bufferFrame + 1) % BufferCount;
 }
 
+BufferSpan dynamicVertexDataBegin(int maxVertexCount, int vertexSize)
+{
+    return s_vertex.BeginRegion(s_bufferFrame, maxVertexCount * vertexSize, vertexSize);
+}
+
+void dynamicVertexDataEnd(int actualVertexCount, int vertexSize)
+{
+    s_vertex.EndRegion(actualVertexCount * vertexSize);
+}
+
+BufferSpan dynamicIndexDataBegin(int maxIndexCount, int indexSize)
+{
+    return s_index.BeginRegion(s_bufferFrame, maxIndexCount * indexSize, indexSize);
+}
+
+void dynamicIndexDataEnd(int actualIndexCount, int indexSize)
+{
+    s_index.EndRegion(actualIndexCount * indexSize);
+}
+
 BufferSpan dynamicUniformData(const void *data, int size)
 {
-    return s_uniform.Upload(s_bufferFrame, data, size, s_uniformBufferOffsetAlignment);
-}
-
-void DynamicVertexState::Lock(int vertexSize)
-{
-    GL3_ASSERT(!m_data);
-    m_vertexSize = vertexSize;
-
-    BufferSpan span = s_vertex.BeginRegion(s_bufferFrame, m_vertexSize, m_capacity);
-    m_bufferHandle = span.buffer;
-    m_baseVertex = span.offset / vertexSize;
-    m_data = static_cast<uint8_t *>(span.pinned);
-
-    m_offset = 0;
-}
-
-void DynamicVertexState::Unlock()
-{
-    GL3_ASSERT(m_data);
-    m_data = nullptr;
-
-    s_vertex.EndRegion(m_vertexSize, m_offset);
-}
-
-void DynamicIndexState::Lock(int indexSize)
-{
-    GL3_ASSERT(indexSize == 2 || indexSize == 4);
-
-    GL3_ASSERT(!m_data);
-    m_indexSize = indexSize;
-
-    BufferSpan span = s_index.BeginRegion(s_bufferFrame, m_indexSize, m_capacity);
-    m_bufferHandle = span.buffer;
-    m_byteOffset = span.offset;
-    m_data = static_cast<uint8_t *>(span.pinned);
-
-    m_offset = 0;
-    m_offsetLastDraw = 0;
-}
-
-void DynamicIndexState::Unlock()
-{
-    GL3_ASSERT(m_data);
-    m_data = nullptr;
-
-    s_index.EndRegion(m_indexSize, m_offset);
+    BufferSpan result = s_uniform.BeginRegion(s_bufferFrame, size, s_uniformBufferOffsetAlignment);
+    memcpy(result.data, data, size);
+    s_uniform.EndRegion(size);
+    return result;
 }
 
 }

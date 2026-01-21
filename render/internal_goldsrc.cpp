@@ -2,89 +2,33 @@
 #include "internal.h"
 #include "model_goldsrc.h"
 #include "random.h"
-#include "lightstyle.h"
 #include "texture.h"
 #include "memory.h"
 #include "brush.h"
 #include "decalclip.h"
 #include "triapigl3.h"
+#include "decal.h"
 
 // warning: this file sucks
 
 namespace Render
 {
 
-enum class SurfaceType
-{
-    Unspecified,
-    Normal,
-    HL25
-};
-
 // tries to validate an msurface_t without dereferencing pointers
-// this is an overkill (would get away with just the plane check), but we want to be sure
 template<typename S>
 static bool ValidateSurface(const goldsrc::model_t *model, const S *surface)
 {
-    // visframe (can be anything if we're switching between renderers during runtime)
-
-    // plane
     int planeIndex = surface->plane - model->planes;
     if (planeIndex < 0 || planeIndex >= model->numplanes)
     {
         return false;
     }
 
-    // flags, 54 is a randomly generated number
-    if (surface->flags < 0 || surface->flags > 54)
-    {
-        return false;
-    }
-
-    // firstedge and numedges, these go out of bounds even with valid bsps?
-
-    // texturemins and extents should be evenly divisible by 16
-    for (int i = 0; i < 2; i++)
-    {
-        if ((surface->texturemins[i] % 16) != 0)
-        {
-            return false;
-        }
-
-        if ((surface->extents[i] % 16) != 0)
-        {
-            return false;
-        }
-    }
-
-    // light_s and light_t should be within the lightmap atlas (128x128)
-    if (surface->light_s < 0 || surface->light_s >= 128
-        || surface->light_t < 0 || surface->light_t >= 128)
-    {
-        return false;
-    }
-
-    // polys, can't check without dereferencing
-    // texturechain, should be null but don't count on it...
-
-    // texinfo
     int texInfoIndex = surface->texinfo - model->texinfo;
     if (texInfoIndex < 0 || texInfoIndex >= model->numtexinfo)
     {
         return false;
     }
-
-    // dlightframe, can't test if switching renderers
-    // dlightbits, can't test if switching renderers
-
-    // lightmaptexturenum is [0, 64[
-    if (surface->lightmaptexturenum < 0 || surface->lightmaptexturenum >= 64)
-    {
-        return false;
-    }
-
-    // samples, can't properly test (we don't know the bounds)
-    // decals, can't test
 
     // i guess it aight
     return true;
@@ -106,55 +50,45 @@ static bool ValidateSurfaces(const goldsrc::model_t *model)
     return true;
 }
 
-static SurfaceType GetSurfaceType(const goldsrc::model_t *model)
+static int GetSurfaceSize(const goldsrc::model_t *model)
 {
-    static SurfaceType surfaceType = SurfaceType::Unspecified;
-    if (surfaceType != SurfaceType::Unspecified)
+    static int surfaceSize;
+    if (surfaceSize)
     {
-        return surfaceType;
+        return surfaceSize;
     }
 
     if (ValidateSurfaces<goldsrc::msurface_t>(model))
     {
-        surfaceType = SurfaceType::Normal;
-        return surfaceType;
+        surfaceSize = sizeof(goldsrc::msurface_t);
+        return surfaceSize;
     }
 
     if (ValidateSurfaces<goldsrc::msurface_new_t>(model))
     {
-        surfaceType = SurfaceType::HL25;
-        return surfaceType;
+        surfaceSize = sizeof(goldsrc::msurface_new_t);
+        return surfaceSize;
     }
 
-    platformError("Failed to determine msurface_t type\n");
+    platformError("Failed to determine msurface_t size\n");
 }
 
 static const goldsrc::msurface_t *GetSurface(const goldsrc::model_t *model, int index)
 {
     GL3_ASSERT(index >= 0 && index < model->numsurfaces);
 
-    if (GetSurfaceType(model) == SurfaceType::HL25)
-    {
-        const goldsrc::msurface_new_t *newSurfaces = reinterpret_cast<const goldsrc::msurface_new_t *>(model->surfaces);
-        return reinterpret_cast<const goldsrc::msurface_t *>(&newSurfaces[index]);
-    }
+    int surfaceSize = GetSurfaceSize(model);
+    const byte *surface = reinterpret_cast<const byte *>(model->surfaces) + (index * surfaceSize);
 
-    return &model->surfaces[index];
+    return reinterpret_cast<const goldsrc::msurface_t*>(surface);
 }
 
 // returns -1 on all error cases
 static int SurfaceIndex(const goldsrc::model_t *model, goldsrc::msurface_t *surface)
 {
-    int index;
-
-    if (GetSurfaceType(model) == SurfaceType::HL25)
-    {
-        index = reinterpret_cast<goldsrc::msurface_new_t *>(surface) - reinterpret_cast<goldsrc::msurface_new_t *>(model->surfaces);
-    }
-    else
-    {
-        index = surface - model->surfaces;
-    }
+    int surfaceSize = GetSurfaceSize(model);
+    int offset = reinterpret_cast<intptr_t>(surface) - reinterpret_cast<intptr_t>(model->surfaces);
+    int index = offset / surfaceSize;
 
     if (index < 0 || index >= model->numsurfaces)
     {
@@ -542,23 +476,11 @@ bool LightmapWideTall(const goldsrc::msurface_t *surface, int &width, int &heigh
     return true;
 }
 
-static int FaceVertexCount(const goldsrc::msurface_t *surface)
-{
-#if 0 // actually don't, we draw skies using surfaces now
-    if (surface->flags & SURF_SKY)
-    {
-        // need to cull sky faces
-        return 0;
-    }
-#endif
-
-    return surface->numedges;
-}
-
 static void LoadFaces(const goldsrc::model_t &engineModel, gl3_worldmodel_t &model)
 {
     model.numsurfaces = engineModel.numsurfaces;
     model.surfaces = memoryLevelAlloc<gl3_surface_t>(model.numsurfaces);
+    model.fatsurfaces = memoryLevelAlloc<gl3_fatsurface_t>(model.numsurfaces);
 
     for (int i = 0; i < model.numsurfaces; i++)
     {
@@ -566,16 +488,21 @@ static void LoadFaces(const goldsrc::model_t &engineModel, gl3_worldmodel_t &mod
         gl3_surface_t *dest = &model.surfaces[i];
 
         dest->flags = source->flags;
-        dest->numverts = FaceVertexCount(source);
-        dest->texturechain = nullptr;
+
+        int texture_index = LookupTextureIndex(engineModel, source->texinfo->texture);
+        GL3_ASSERT(texture_index != -1);
+        dest->texture = &model.textures[texture_index];
 
         int plane_index = source->plane - engineModel.planes;
         GL3_ASSERT(plane_index >= 0 && plane_index < engineModel.numplanes);
         dest->plane = &model.planes[plane_index];
 
-        int texture_index = LookupTextureIndex(engineModel, source->texinfo->texture);
-        GL3_ASSERT(texture_index != -1);
-        dest->texture = &model.textures[texture_index];
+        // build the fat surface
+        gl3_fatsurface_t *full = &model.fatsurfaces[i];
+
+        // vertex offset determined when building the vertex buffer
+        full->numverts = source->numedges;
+        GL3_ASSERT(full->numverts >= 3);
 
         // keep going until we hit the terminator
         int style_count = 0;
@@ -590,22 +517,22 @@ static void LoadFaces(const goldsrc::model_t &engineModel, gl3_worldmodel_t &mod
             // we use lightstyle 63 as the null lightstyle so make sure we write nothing higher than that
             GL3_ASSERT(source->styles[j] < NULL_LIGHTSTYLE);
 
-            dest->styles[j] = Q_min(source->styles[j], (byte)NULL_LIGHTSTYLE);
+            full->styles[j] = Q_min(source->styles[j], (byte)NULL_LIGHTSTYLE);
             style_count++;
         }
 
         // set null values, they're nonzero
         for (int j = style_count; j < MAXLIGHTMAPS; j++)
         {
-            dest->styles[j] = NULL_LIGHTSTYLE;
+            full->styles[j] = NULL_LIGHTSTYLE;
         }
 
         // lightmap stuff (FIXME: we could omit even more surfaces from lightmap building)
         if (source->samples && style_count
-            && LightmapWideTall(source, dest->lightmap_width, dest->lightmap_height))
+            && LightmapWideTall(source, full->lightmap_width, full->lightmap_height))
         {
-            dest->style_count = style_count;
-            dest->lightmap_data = reinterpret_cast<Color24 *>(source->samples);
+            full->style_count = style_count;
+            full->lightmap_data = reinterpret_cast<Color24 *>(source->samples);
         }
     }
 }
@@ -675,29 +602,38 @@ static void LoadLeafs(const goldsrc::model_t &engineModel, gl3_worldmodel_t &mod
 
     for (int i = 0; i < model.numleafs_total; i++)
     {
-        GL3_ASSERT((engineModel.leafs[i].contents >= -15 && engineModel.leafs[i].contents < 0));
+        gl3_leaf_t &dest = model.leafs[i];
+        goldsrc::mleaf_t &source = engineModel.leafs[i];
 
-        model.leafs[i].contents = engineModel.leafs[i].contents;
+        GL3_ASSERT((source.contents >= -15 && source.contents < 0));
 
-        model.leafs[i].mins = engineModel.leafs[i].mins;
-        model.leafs[i].maxs = engineModel.leafs[i].maxs;
+        dest.contents = source.contents;
 
-        model.leafs[i].compressed_vis = engineModel.leafs[i].compressed_vis; // don't make a copy
+        dest.center = (source.mins + source.maxs) * 0.5f;
+        dest.extents = (source.maxs - source.mins) * 0.5f;
 
-        if (engineModel.leafs[i].nummarksurfaces)
+        dest.compressed_vis = source.compressed_vis; // don't make a copy
+
+        if (source.nummarksurfaces)
         {
-            int firstmarksurface_index = engineModel.leafs[i].firstmarksurface - engineModel.marksurfaces;
-            GL3_ASSERT(firstmarksurface_index >= 0 && firstmarksurface_index < engineModel.nummarksurfaces);
+            dest.nummarksurfaces = source.nummarksurfaces;
+            dest.firstmarksurface = memoryLevelAlloc<int>(dest.nummarksurfaces);
 
-            model.leafs[i].firstmarksurface = &model.marksurfaces[firstmarksurface_index];
-            model.leafs[i].nummarksurfaces = engineModel.leafs[i].nummarksurfaces;
-
-            for (int j = 0; j < model.leafs[i].nummarksurfaces; j++)
+            for (int j = 0; j < dest.nummarksurfaces; j++)
             {
-                gl3_surface_t *surface = model.leafs[i].firstmarksurface[j];
-                if (surface && surface->numverts)
+                goldsrc::msurface_t *surface = source.firstmarksurface[j];
+                int surface_index = SurfaceIndex(&engineModel, surface);
+                GL3_ASSERT(surface_index >= 0 && surface_index < model.numsurfaces);
+                dest.firstmarksurface[j] = surface_index;
+            }
+
+            for (int j = 0; j < dest.nummarksurfaces; j++)
+            {
+                gl3_fatsurface_t *surface = &model.fatsurfaces[dest.firstmarksurface[j]];
+                if (surface->numverts)
                 {
-                    model.leafs[i].has_visible_surfaces = true;
+                    GL3_ASSERT(dest.contents != CONTENTS_SOLID);
+                    dest.has_visible_surfaces = true;
                     break;
                 }
             }
@@ -723,42 +659,68 @@ static void LoadNodes(const goldsrc::model_t &engineModel, gl3_worldmodel_t &mod
 
     for (int i = 0; i < model.numnodes; i++)
     {
-        model.nodes[i].contents = engineModel.nodes[i].contents;
+        gl3_node_t &dest = model.nodes[i];
+        goldsrc::mnode_t &source = engineModel.nodes[i];
 
-        model.nodes[i].mins = engineModel.nodes[i].mins;
-        model.nodes[i].maxs = engineModel.nodes[i].maxs;
+        GL3_ASSERT(source.contents == 0);
+        dest.contents = source.contents;
 
-        int plane_index = engineModel.nodes[i].plane - engineModel.planes;
+        dest.center = (source.mins + source.maxs) * 0.5f;
+        dest.extents = (source.maxs - source.mins) * 0.5f;
+
+        int plane_index = source.plane - engineModel.planes;
         GL3_ASSERT(plane_index >= 0 && plane_index < engineModel.numplanes);
-        model.nodes[i].plane = &model.planes[plane_index];
+        dest.plane = &model.planes[plane_index];
 
         for (int j = 0; j < 2; j++)
         {
-            if (!engineModel.nodes[i].children[j])
+            if (!source.children[j])
             {
                 GL3_ASSERT(false);
                 continue;
             }
 
-            int node_index = engineModel.nodes[i].children[j] - engineModel.nodes;
-            int leaf_index = (goldsrc::mleaf_t *)engineModel.nodes[i].children[j] - engineModel.leafs;
+            int node_index = source.children[j] - engineModel.nodes;
+            int leaf_index = (goldsrc::mleaf_t *)source.children[j] - engineModel.leafs;
 
             if (node_index >= 0 && node_index < engineModel.numnodes)
             {
-                model.nodes[i].children[j] = &model.nodes[node_index];
+                dest.children[j] = &model.nodes[node_index];
             }
             else if (leaf_index >= 0 && leaf_index < model.numleafs_total) // note how we use model.numleafs_total!!! see leaf loading code
             {
-                model.nodes[i].children[j] = (gl3_node_t *)&model.leafs[leaf_index];
+                dest.children[j] = (gl3_node_t *)&model.leafs[leaf_index];
             }
             else
             {
                 GL3_ASSERT(false);
             }
         }
+
+        dest.firstsurface = source.firstsurface;
+        dest.numsurfaces = source.numsurfaces;
     }
 
     SetParent(model.nodes, nullptr);
+
+    // populate has_visible_surfaces
+    for (int i = 0; i < model.numleafs_total; i++)
+    {
+        gl3_leaf_t &leaf = model.leafs[i];
+        if (!leaf.has_visible_surfaces)
+        {
+            continue;
+        }
+
+        gl3_node_t *node = reinterpret_cast<gl3_node_t *>(&leaf);
+        node = node->parent;
+
+        while (node && !node->has_visible_surfaces)
+        {
+            node->has_visible_surfaces = true;
+            node = node->parent;
+        }
+    }
 }
 
 bool internalLoadBrushModel(model_t *model, gl3_worldmodel_t *outModel)
@@ -773,6 +735,47 @@ bool internalLoadBrushModel(model_t *model, gl3_worldmodel_t *outModel)
     LoadLeafs(src, *outModel);
     LoadNodes(src, *outModel);
 
+    // allocate drawsurfaces arrays
+    for (int i = 0; i < outModel->numsurfaces; i++)
+    {
+        gl3_surface_t &surface = outModel->surfaces[i];
+        surface.texture->numdrawsurfaces++;
+
+        constexpr uint32_t TexDependentMask = SURF_SKY | SURF_WATER | SURF_SCROLL;
+        surface.texture->surfflags |= surface.flags & TexDependentMask;
+
+#ifdef SCHIZO_DEBUG
+        GL3_ASSERT((surface.texture->surfflags & TexDependentMask) == (surface.flags & TexDependentMask));
+#endif
+    }
+
+    for (int i = 0; i < outModel->numtextures; i++)
+    {
+        gl3_texture_t &texture = outModel->textures[i];
+        if (texture.numdrawsurfaces)
+        {
+            texture.drawsurfaces = memoryStaticAlloc<gl3_surface_t *>(texture.numdrawsurfaces);
+            texture.numdrawsurfaces = 0;
+        }
+    }
+
+    // sigh, i guess we do this here: determine maximum amount of indices an inline model might have
+    for (int i = 0; i < src.numsubmodels; i++)
+    {
+        goldsrc::dmodel_t &submodel = src.submodels[i];
+        gl3_surface_t *begin = &outModel->surfaces[submodel.firstface];
+        gl3_surface_t *end = begin + submodel.numfaces;
+
+        int indexCount = 0;
+
+        for (gl3_surface_t *surface = begin; surface != end; surface++)
+        {
+            indexCount += (surface->numverts - 2) * 3;
+        }
+
+        outModel->max_submodel_index_count = Q_max(outModel->max_submodel_index_count, indexCount);
+    }
+
     return true;
 }
 
@@ -782,17 +785,26 @@ gl3_brushvert_t *internalBuildVertexBuffer(model_t *model, gl3_worldmodel_t *out
 
     // count vertices in this model
     int num_verts = 0;
+    int num_indices = 0;
+
+    // associate surfaces with textures
+    std::vector<std::vector<int>> textureSurfaceIndices;
+    textureSurfaceIndices.resize(outModel->numtextures);
 
     for (int j = 0; j < engineModel.numsurfaces; j++)
     {
         const goldsrc::msurface_t *surface = GetSurface(&engineModel, j);
-        if (!FaceVertexCount(surface))
-            continue;
-
         num_verts += surface->numedges;
+        num_indices += (surface->numedges - 2) * 3;
+
+        gl3_surface_t *dest = &outModel->surfaces[j];
+        gl3_texture_t *texture = dest->texture;
+        int textureIndex = texture - outModel->textures;
+        textureSurfaceIndices[textureIndex].push_back(j);
     }
 
-    outModel->index_size = (num_verts > 0xffff) ? 4 : 2;
+    // this will be the maximum index count we could possibly draw
+    outModel->max_index_count = num_indices;
 
     // temporary memory for vbo contents
     gl3_brushvert_t *vertex_buffer = temp.Alloc<gl3_brushvert_t>(num_verts);
@@ -800,95 +812,78 @@ gl3_brushvert_t *internalBuildVertexBuffer(model_t *model, gl3_worldmodel_t *out
     // same loop again for populating the vertex buffer
     int vert_offset = 0;
 
-    for (int j = 0; j < engineModel.numsurfaces; j++)
+    for (int texid = 0; texid < outModel->numtextures; texid++)
     {
-        const goldsrc::msurface_t *surface = GetSurface(&engineModel, j);
-        if (!FaceVertexCount(surface))
+        int basevertex = vert_offset;
+        outModel->textures[texid].basevertex = basevertex;
+
+        std::vector<int> &surfids = textureSurfaceIndices[texid];
+        for (int j : surfids)
         {
-            continue;
-        }
+            const goldsrc::msurface_t *surface = GetSurface(&engineModel, j);
+            const goldsrc::mtexinfo_t *texinfo = surface->texinfo;
 
-        const goldsrc::mtexinfo_t *texinfo = surface->texinfo;
+            int texture_width = texinfo->texture->width;
+            int texture_height = texinfo->texture->height;
 
-        int texture_width = texinfo->texture->width;
-        int texture_height = texinfo->texture->height;
-
-        if (texinfo->texture->name[0] == '-')
-        {
-            // composite tiled texture, different width/height
-            GL3_ASSERT(texinfo->texture->anim_total >= 0 && texinfo->texture->anim_total <= 10);
-            int size = TiledTextureGridSize(texinfo->texture->anim_total);
-            texture_width *= size;
-            texture_height *= size;
-        }
-
-        outModel->surfaces[j].firstvert = vert_offset;
-
-        // compute in-memory mini per surface index buffers
-        auto dest = &outModel->surfaces[j];
-        if (dest->numverts)
-        {
-            dest->numindices = (dest->numverts - 2) * 3;
-            if (outModel->index_size == 4)
+            if (texinfo->texture->name[0] == '-')
             {
-                uint32_t *indices = memoryLevelAlloc<uint32_t>(dest->numindices);
-                dest->indices = indices;
+                // composite tiled texture, different width/height
+                GL3_ASSERT(texinfo->texture->anim_total >= 0 && texinfo->texture->anim_total <= 10);
+                int size = TiledTextureGridSize(texinfo->texture->anim_total);
+                texture_width *= size;
+                texture_height *= size;
+            }
 
-                for (int i = 1; i < dest->numverts - 1; i++)
+            gl3_surface_t *surf = &outModel->surfaces[j];
+            gl3_fatsurface_t *full = &outModel->fatsurfaces[j];
+            full->firstvert = vert_offset;
+
+            int firstvert_nobase = vert_offset - basevertex;
+            GL3_ASSERT(firstvert_nobase >= 0);
+
+            surf->firstvert = firstvert_nobase;
+            surf->numverts = full->numverts;
+
+            for (int k = 0; k < surface->numedges; k++)
+            {
+                int vertex_num;
+
+                int surfedge = engineModel.surfedges[surface->firstedge + k];
+
+                if (surfedge <= 0)
+                    vertex_num = engineModel.edges[-surfedge].v[1];
+                else
+                    vertex_num = engineModel.edges[surfedge].v[0];
+
+                const goldsrc::mvertex_t *vertex = &engineModel.vertexes[vertex_num];
+                float s = Dot(vertex->position, texinfo->vec_s) + texinfo->dist_s;
+                float t = Dot(vertex->position, texinfo->vec_t) + texinfo->dist_t;
+
+                // set the lightmap width later
+                vertex_buffer[vert_offset + k].position = { vertex->position, 0 };
+
+                vertex_buffer[vert_offset + k].texCoord.x = s / texture_width;
+                vertex_buffer[vert_offset + k].texCoord.y = t / texture_height;
+
+                // lightmap texcoords are computed in lightmapCreateAtlas when we know the atlas size
+                vertex_buffer[vert_offset + k].lightmapTexCoord[0] = STORE_U16(s - surface->texturemins[0]);
+                vertex_buffer[vert_offset + k].lightmapTexCoord[1] = STORE_U16(t - surface->texturemins[1]);
+
+                for (int style = 0; style < MAXLIGHTMAPS; style++)
                 {
-                    indices[0] = dest->firstvert;
-                    indices[1] = dest->firstvert + i;
-                    indices[2] = dest->firstvert + i + 1;
-                    indices += 3;
+                    vertex_buffer[vert_offset + k].styles[style] = surface->styles[style];
                 }
             }
-            else
-            {
-                uint16_t *indices = memoryLevelAlloc<uint16_t>(dest->numindices);
-                dest->indices = indices;
 
-                for (int i = 1; i < dest->numverts - 1; i++)
-                {
-                    indices[0] = static_cast<uint16_t>(dest->firstvert);
-                    indices[1] = static_cast<uint16_t>(dest->firstvert + i);
-                    indices[2] = static_cast<uint16_t>(dest->firstvert + i + 1);
-                    indices += 3;
-                }
-            }
+            vert_offset += surface->numedges;
         }
 
-        for (int k = 0; k < surface->numedges; k++)
+        int vert_count = vert_offset - basevertex;
+        if (vert_count > UINT16_MAX)
         {
-            int vertex_num;
-
-            int surfedge = engineModel.surfedges[surface->firstedge + k];
-
-            if (surfedge <= 0)
-                vertex_num = engineModel.edges[-surfedge].v[1];
-            else
-                vertex_num = engineModel.edges[surfedge].v[0];
-
-            const goldsrc::mvertex_t *vertex = &engineModel.vertexes[vertex_num];
-            float s = Dot(vertex->position, texinfo->vec_s) + texinfo->dist_s;
-            float t = Dot(vertex->position, texinfo->vec_t) + texinfo->dist_t;
-
-            // set the lightmap width later
-            vertex_buffer[vert_offset + k].position = { vertex->position, 0 };
-
-            vertex_buffer[vert_offset + k].texCoord.x = s / texture_width;
-            vertex_buffer[vert_offset + k].texCoord.y = t / texture_height;
-
-            // lightmap texcoords are computed in lightmapCreateAtlas when we know the atlas size
-            vertex_buffer[vert_offset + k].texCoord.z = (s - surface->texturemins[0]);
-            vertex_buffer[vert_offset + k].texCoord.w = (t - surface->texturemins[1]);
-
-            for (int style = 0; style < MAXLIGHTMAPS; style++)
-            {
-                vertex_buffer[vert_offset + k].styles[style] = surface->styles[style];
-            }
+            platformError("Too many vertices per texture");
         }
-
-        vert_offset += surface->numedges;
     }
 
     GL3_ASSERT(vert_offset == num_verts);
@@ -936,36 +931,8 @@ static const goldsrc::glvert_t *ClipDecal(const goldsrc::decal_t *decal, const g
     return temp1;
 }
 
-void *internalSurfaceDecals(model_t *_model, void *lastDecal, int surfaceIndex, GLuint *texture, gl3_brushvert_t *vertices, int *vertexCount)
+static void GetDecalVertices(const goldsrc::msurface_t *surface, goldsrc::decal_t *decal, GLuint *texture, gl3_brushvert_t *vertices, int *vertexCount)
 {
-    goldsrc::model_t *model = reinterpret_cast<goldsrc::model_t *>(_model);
-    GL3_ASSERT(model);
-
-    if (surfaceIndex < 0 || surfaceIndex >= model->numsurfaces)
-    {
-        GL3_ASSERT(false);
-        return nullptr;
-    }
-
-    const goldsrc::msurface_t *surface = GetSurface(model, surfaceIndex);
-
-    goldsrc::decal_t *decal = nullptr;
-    if (lastDecal)
-    {
-        decal = static_cast<goldsrc::decal_t *>(lastDecal);
-        decal = decal->pnext;
-    }
-    else
-    {
-        decal = surface->pdecals;
-    }
-
-    if (!decal)
-    {
-        // no more decals
-        return nullptr;
-    }
-
     goldsrc::texture_t *decalTexture = static_cast<goldsrc::texture_t *>(platformGetDecalTexture(decal->texture));
     *texture = decalTexture->gl_texturenum;
 
@@ -973,7 +940,7 @@ void *internalSurfaceDecals(model_t *_model, void *lastDecal, int surfaceIndex, 
     const goldsrc::glvert_t *clippedVertices = ClipDecal(decal, surface, decalTexture, *vertexCount);
 
     // NOTE: only set position and texcoords here!!!
-    // caller will set lightmap width and lightstyles
+    // caller will set lightmap width, lightstyles and update lightmap texcoords using gl3_fatsurface_t
     const goldsrc::mtexinfo_t *texinfo = surface->texinfo;
 
     for (int i = 0; i < *vertexCount; i++)
@@ -985,14 +952,49 @@ void *internalSurfaceDecals(model_t *_model, void *lastDecal, int surfaceIndex, 
         vertices[i].texCoord.x = clippedVertices[i].texcoord.x;
         vertices[i].texCoord.y = clippedVertices[i].texcoord.y;
 
-        float s = Dot((Vector3 &)vertices[i], texinfo->vec_s) + texinfo->dist_s;
-        float t = Dot((Vector3 &)vertices[i], texinfo->vec_t) + texinfo->dist_t;
+        float s = Dot((Vector3 &)vertices[i].position, texinfo->vec_s) + texinfo->dist_s;
+        float t = Dot((Vector3 &)vertices[i].position, texinfo->vec_t) + texinfo->dist_t;
 
-        vertices[i].texCoord.z = (s - surface->texturemins[0]);
-        vertices[i].texCoord.w = (t - surface->texturemins[1]);
+        vertices[i].lightmapTexCoord[0] = STORE_U16(s - surface->texturemins[0]);
+        vertices[i].lightmapTexCoord[1] = STORE_U16(t - surface->texturemins[1]);
     }
+}
 
-    return decal;
+void internalSurfaceDecals(gl3_worldmodel_t *model, int surfaceIndex)
+{
+    const goldsrc::model_t *engine_model = reinterpret_cast<goldsrc::model_t *>(model->engine_model);
+    GL3_ASSERT(surfaceIndex >= 0 && surfaceIndex < engine_model->numsurfaces);
+
+    const goldsrc::msurface_t *surface = GetSurface(engine_model, surfaceIndex);
+    gl3_fatsurface_t *fatsurface = &model->fatsurfaces[surfaceIndex];
+
+    for (goldsrc::decal_t *decal = surface->pdecals; decal; decal = decal->pnext)
+    {
+        GLuint texture;
+        int vertexCount;
+        gl3_brushvert_t vertices[32];
+
+        GetDecalVertices(surface, decal, &texture, vertices, &vertexCount);
+
+        // NOTE: GetDecalVertices only sets position and texcoords, we need to fill the rest
+        for (int i = 0; i < vertexCount; i++)
+        {
+            vertices[i].position.w = (float)fatsurface->lightmap_width / model->lightmap_width;
+
+            vertices[i].lightmapTexCoord[0] = PACK_U16((float)(vertices[i].lightmapTexCoord[0] + (fatsurface->lightmap_x * 16) + 8) / (model->lightmap_width * 16));
+            vertices[i].lightmapTexCoord[1] = PACK_U16((float)(vertices[i].lightmapTexCoord[1] + (fatsurface->lightmap_y * 16) + 8) / (model->lightmap_height * 16));
+
+            for (int j = 0; j < MAXLIGHTMAPS; j++)
+            {
+                vertices[i].styles[j] = fatsurface->styles[j];
+            }
+        }
+
+        if (vertexCount != 0)
+        {
+            decalAdd(texture, vertices, vertexCount);
+        }
+    }
 }
 
 void internalClearBoundTexture()
@@ -1127,7 +1129,7 @@ bool internalTraceLineToSky(model_t *_model, const Vector3 &start, const Vector3
     return true;
 }
 
-static bool SampleLightmap(Vector3 &color, goldsrc::model_t *model, goldsrc::mnode_t *node, const Vector3 &start, const Vector3 &end)
+static bool SampleLightmap(LightmapSamples &result, goldsrc::model_t *model, goldsrc::mnode_t *node, const Vector3 &start, const Vector3 &end)
 {
     while (true)
     {
@@ -1149,7 +1151,7 @@ static bool SampleLightmap(Vector3 &color, goldsrc::model_t *model, goldsrc::mno
         float frac = dist1 / (dist1 - dist2);
         Vector3 point = VectorLerp(start, end, frac);
 
-        if (SampleLightmap(color, model, node->children[side], start, point))
+        if (SampleLightmap(result, model, node->children[side], start, point))
         {
             return true;
         }
@@ -1162,8 +1164,8 @@ static bool SampleLightmap(Vector3 &color, goldsrc::model_t *model, goldsrc::mno
                 continue;
             }
 
-            double ds = Dot(point, face->texinfo->vec_s) + face->texinfo->dist_s;
-            double dt = Dot(point, face->texinfo->vec_t) + face->texinfo->dist_t;
+            float ds = (float)(DotDouble(point, face->texinfo->vec_s) + face->texinfo->dist_s);
+            float dt = (float)(DotDouble(point, face->texinfo->vec_t) + face->texinfo->dist_t);
 
             int s = (int)ds;
             int t = (int)dt;
@@ -1187,47 +1189,76 @@ static bool SampleLightmap(Vector3 &color, goldsrc::model_t *model, goldsrc::mno
 
             int lightmap_width = (face->extents[0] / 16) + 1;
             int lightmap_height = (face->extents[1] / 16) + 1;
-            int lightmap_x = s / 16;
-            int lightmap_y = t / 16;
 
-            color24 *lightmap = &face->samples[lightmap_y * lightmap_width + lightmap_x];
+            // 1. Get float position relative to the lightmap start
+            float fs = ds - face->texturemins[0];
+            float ft = dt - face->texturemins[1];
+
+            // 2. Calculate integer grid position and fractional offset (0.0 - 1.0)
+            int x = (int)(fs / 16.0f);
+            int y = (int)(ft / 16.0f);
+            float ratio_x = (fs / 16.0f) - x;
+            float ratio_y = (ft / 16.0f) - y;
+
+            // 3. Determine offsets for the "Next" pixels safely
+            // If moving right/down goes out of bounds, we just stay at 0 offset (nearest)
+            int step_x = 1;
+            int step_y = lightmap_width;
+            // int step_x = (x < lightmap_width - 1) ? 1 : 0;
+            // int step_y = (y < lightmap_height - 1) ? lightmap_width : 0;
+
+            int base_idx = y * lightmap_width + x;
 
             for (int j = 0; j < MAXLIGHTMAPS; j++)
             {
-                int style = face->styles[j];
+                uint8_t style = face->styles[j];
+                result.samples[j].style = style;
+
                 if (style >= MAX_LIGHTSTYLES)
                 {
                     break;
                 }
 
-                float weight = g_lightstyles[style];
-                color.x += lightmap->r * weight;
-                color.y += lightmap->g * weight;
-                color.z += lightmap->b * weight;
+                // Pointer to the start of this style's layer
+                color24 *layer = face->samples + (lightmap_width * lightmap_height * j);
 
-                lightmap += (lightmap_width * lightmap_height);
+                // 4. Fetch the four neighbors using our safe offsets
+                // TL = Top-Left, TR = Top-Right, BL = Bot-Left, BR = Bot-Right
+                color24 cTL = layer[base_idx];
+                color24 cTR = layer[base_idx + step_x];
+                color24 cBL = layer[base_idx + step_y];
+                color24 cBR = layer[base_idx + step_y + step_x];
+
+                // 5. Interpolate
+                // Blend Horizontal
+                float topR = cTL.r * (1.0f - ratio_x) + cTR.r * ratio_x;
+                float topG = cTL.g * (1.0f - ratio_x) + cTR.g * ratio_x;
+                float topB = cTL.b * (1.0f - ratio_x) + cTR.b * ratio_x;
+
+                float botR = cBL.r * (1.0f - ratio_x) + cBR.r * ratio_x;
+                float botG = cBL.g * (1.0f - ratio_x) + cBR.g * ratio_x;
+                float botB = cBL.b * (1.0f - ratio_x) + cBR.b * ratio_x;
+
+                // Blend Vertical
+                result.samples[j].r = (uint8_t)(topR * (1.0f - ratio_y) + botR * ratio_y);
+                result.samples[j].g = (uint8_t)(topG * (1.0f - ratio_y) + botG * ratio_y);
+                result.samples[j].b = (uint8_t)(topB * (1.0f - ratio_y) + botB * ratio_y);
             }
 
             return true;
         }
 
-        return SampleLightmap(color, model, node->children[!side], point, end);
+        return SampleLightmap(result, model, node->children[!side], point, end);
     }
 }
 
-colorVec internalSampleLightmap(model_t *_model, const Vector3 &start, const Vector3 &end)
+LightmapSamples internalSampleLightmap(model_t *_model, const Vector3 &start, const Vector3 &end)
 {
     goldsrc::model_t *model = (goldsrc::model_t *)_model;
 
-    Vector3 colour{};
-    SampleLightmap(colour, model, model->nodes, start, end);
-
-    colorVec result{};
-    result.r = Q_min((unsigned)colour.x, 255u);
-    result.g = Q_min((unsigned)colour.y, 255u);
-    result.b = Q_min((unsigned)colour.z, 255u);
-
-    return result;
+    LightmapSamples samples{};
+    SampleLightmap(samples, model, model->nodes, start, end);
+    return samples;
 }
 
 void internalUpdateViewmodelAnimation(cl_entity_t *viewmodel)

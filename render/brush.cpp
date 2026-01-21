@@ -20,15 +20,10 @@ struct BrushConstants
     Vector4 renderColor;
 };
 
-// legacy trauma, used for setting the uniforms
-struct BrushShaderOptions
-{
-    bool lightmapped;
-};
-
 static const VertexAttrib s_vertexAttribs[] = {
     VERTEX_ATTRIB(gl3_brushvert_t, position),
     VERTEX_ATTRIB(gl3_brushvert_t, texCoord),
+    VERTEX_ATTRIB_NORM(gl3_brushvert_t, lightmapTexCoord),
     VERTEX_ATTRIB(gl3_brushvert_t, styles),
     VERTEX_ATTRIB_TERM()
 };
@@ -82,15 +77,23 @@ public:
     }
 };
 
-gl3_worldmodel_t g_worldmodel_static;
-
-// water and sky are drawn with different shaders
-static gl3_surface_t *s_waterSurfaces;
-static gl3_surface_t *s_skySurfaces;
-
 static BrushShader s_shader;
 static BrushShaderAlphaTest s_shaderAlphaTest;
 static BrushShaderNoLighting s_shaderNoLighting;
+
+gl3_worldmodel_t g_worldmodel_static;
+
+// should be correct? accessed with signed 16 bit ints
+#define MAX_SURFACES 32768
+static uint32_t s_surfaceVisBits[MAX_SURFACES / 32];
+
+static int s_indexCount;
+static int s_indexLastDraw;
+static BufferSpanT<uint16_t> s_indexSpan;
+
+// this is so dumb
+static bool s_hasWaterSurfaces = false;
+static bool s_hasSkySurfaces = false;
 
 static cvar_t *gl3_brush_face_cull;
 
@@ -103,18 +106,18 @@ void brushInit()
     shaderRegister(s_shaderNoLighting);
 }
 
-static void BuildLightmapAndVertexBuffer(model_t *model, gl3_worldmodel_t *dstmod)
+static void BuildLightmapAndVertexBuffer(model_t *model)
 {
     TempMemoryScope temp;
 
     int num_verts;
-    gl3_brushvert_t *vertex_buffer = internalBuildVertexBuffer(model, dstmod, num_verts, temp);
+    gl3_brushvert_t *vertex_buffer = internalBuildVertexBuffer(model, g_worldmodel, num_verts, temp);
 
     // lightmap building modifies the lightmap texcoords, so do it here before the vertex data gets uploaded
-    dstmod->lightmap_texture = lightmapCreateAtlas(g_worldmodel, vertex_buffer);
+    g_worldmodel->lightmap_texture = lightmapCreateAtlas(g_worldmodel, vertex_buffer);
 
-    glGenBuffers(1, &dstmod->vertex_buffer);
-    glBindBuffer(GL_ARRAY_BUFFER, dstmod->vertex_buffer);
+    glGenBuffers(1, &g_worldmodel->vertex_buffer);
+    glBindBuffer(GL_ARRAY_BUFFER, g_worldmodel->vertex_buffer);
     glBufferData(GL_ARRAY_BUFFER, sizeof(*vertex_buffer) * num_verts, vertex_buffer, GL_STATIC_DRAW);
 }
 
@@ -122,7 +125,7 @@ void brushLoadWorldModel(model_t *engineModel)
 {
     memset(g_worldmodel, 0, sizeof(*g_worldmodel));
     internalLoadBrushModel(engineModel, g_worldmodel);
-    BuildLightmapAndVertexBuffer(engineModel, g_worldmodel);
+    BuildLightmapAndVertexBuffer(engineModel);
 }
 
 void brushFreeWorldModel()
@@ -132,32 +135,59 @@ void brushFreeWorldModel()
     glDeleteTextures(1, &g_worldmodel->lightmap_texture);
 }
 
-static void MapIndexBuffer()
+static void MapIndexBuffer(int maxIndices)
 {
-    g_dynamicIndexState.Lock(g_worldmodel->index_size);
-    commandBindIndexBuffer(g_dynamicIndexState.IndexBuffer());
+    GL3_ASSERT(!s_indexCount);
+    GL3_ASSERT(!s_indexLastDraw);
+
+    s_indexSpan = dynamicIndexDataBegin<uint16_t>(maxIndices);
+
+    commandBindIndexBuffer(s_indexSpan.buffer);
 }
 
 static void UnmapIndexBuffer()
 {
-    g_dynamicIndexState.Unlock();
+    dynamicIndexDataEnd<uint16_t>(s_indexCount);
+    s_indexCount = 0;
+    s_indexLastDraw = 0;
 }
 
-static void DrawIndexBuffer()
+static void DrawIndexBuffer(int baseVertex)
 {
-    int indexByteOffset;
-    int indexCount = g_dynamicIndexState.UpdateDrawOffset(indexByteOffset);
+    int indexCount = s_indexCount - s_indexLastDraw;
     if (!indexCount)
     {
         return;
     }
 
-    commandDrawElements(GL_TRIANGLES, indexCount, g_dynamicIndexState.IndexType(), indexByteOffset);
+    GL3_ASSERT(indexCount > 0);
+
+    int byteOffset = s_indexSpan.byteOffset + (s_indexLastDraw * sizeof(uint16_t));
+
+    commandDrawElementsBaseVertex(GL_TRIANGLES, indexCount, GL_UNSIGNED_SHORT, byteOffset, baseVertex);
+
+    s_indexLastDraw = s_indexCount;
 }
 
 static void AddSurfaceToIndexBuffer(gl3_surface_t *surface)
 {
-    g_dynamicIndexState.Write(surface->indices, surface->numindices);
+    // can overflow due to decal indices, but unlikely...
+    int numtris = surface->numverts - 2;
+
+    uint16_t *dest = &s_indexSpan.data[s_indexCount];
+    s_indexCount += (numtris * 3);
+
+    uint16_t firstvert = static_cast<uint16_t>(surface->firstvert);
+    uint16_t current = firstvert + 1;
+
+    for (int i = 0; i < numtris; i++)
+    {
+        dest[0] = firstvert;
+        dest[1] = current;
+        dest[2] = current + 1;
+        current++;
+        dest += 3;
+    }
 }
 
 static gl3_texture_t *TextureAnimation(cl_entity_t *entity, gl3_texture_t *texture)
@@ -187,111 +217,94 @@ static gl3_texture_t *TextureAnimation(cl_entity_t *entity, gl3_texture_t *textu
     return texture;
 }
 
-static bool SideCameraIsOn(const gl3_plane_t *plane)
+static void AddSurface_NoDecals(gl3_surface_t *surface)
 {
-    switch (plane->type)
-    {
-    case PLANE_X:
-        return g_state.viewOrigin.x < plane->dist;
-    case PLANE_Y:
-        return g_state.viewOrigin.y < plane->dist;
-    case PLANE_Z:
-        return g_state.viewOrigin.z < plane->dist;
-    }
-
-    return Dot(plane->normal, g_state.viewOrigin) < plane->dist;
+    gl3_texture_t *texture = surface->texture;
+    texture->drawsurfaces[texture->numdrawsurfaces++] = surface;
 }
 
-static bool CacheSideCameraIsOn(gl3_plane_t *plane)
+void TraverseTree_r(gl3_node_t *node)
 {
-    if (plane->cullframe != g_state.frameCount)
-    {
-        plane->cullframe = g_state.frameCount;
-        plane->cullside = SideCameraIsOn(plane);
-    }
-
-    return plane->cullside;
-}
-
-static void AddSurface(gl3_worldmodel_t *model, gl3_surface_t *surface, bool drawDecals = true, bool cullBackfaces = true)
-{
-    if (!surface->numverts)
+    if (node->pvsframe != g_pvsFrame)
     {
         return;
     }
 
-    if (cullBackfaces && !(surface->flags & SURF_WATER) && gl3_brush_face_cull->value)
+    // shouldn't be visiting nodes with no visible surfaces, and solid leaves are not drawn
+    GL3_ASSERT(node->has_visible_surfaces);
+    GL3_ASSERT(node->contents != CONTENTS_SOLID);
+
+    if (g_state.viewFrustum.CullBox(node->center, node->extents))
     {
-        bool back = CacheSideCameraIsOn(surface->plane);
-        bool invert = (surface->flags & SURF_BACK);
-        if (back != invert)
+        return;
+    }
+
+    if (node->contents < 0)
+    {
+        gl3_leaf_t *leaf = (gl3_leaf_t *)node;
+        GL3_ASSERT(leaf->has_visible_surfaces);
+
+        int *begin = leaf->firstmarksurface;
+        int *end = begin + leaf->nummarksurfaces;
+
+        for (int *mark = begin; mark < end; mark++)
         {
-            return;
+            int i = *mark;
+            s_surfaceVisBits[i >> 5] |= (1 << (i & 31));
         }
+
+        return;
     }
 
-    if (surface->flags & SURF_WATER)
-    {
-        surface->texturechain = s_waterSurfaces;
-        s_waterSurfaces = surface;
-    }
-    else if (surface->flags & SURF_SKY)
-    {
-        surface->texturechain = s_skySurfaces;
-        s_skySurfaces = surface;
-    }
-    else
-    {
-        gl3_texture_t *texture = surface->texture;
-        surface->texturechain = texture->texturechain;
-        texture->texturechain = surface;
-    }
+    gl3_plane_t *plane = node->plane;
+    int side = Dot(plane->normal, g_state.viewOrigin) < plane->dist;
+    int sideFlag = side ? SURF_BACK : 0;
 
-    if (drawDecals)
-    {
-        decalAddFromSurface(model, surface);
-    }
-}
+    TraverseTree_r(node->children[side]);
 
-static void LinkLeafFaces(gl3_worldmodel_t *model, gl3_leaf_t &leaf)
-{
-    for (int j = 0; j < leaf.nummarksurfaces; j++)
+    int begin = node->firstsurface;
+    int end = begin + node->numsurfaces;
+
+    for (int i = begin; i < end; i++)
     {
-        gl3_surface_t *surface = leaf.firstmarksurface[j];
-        if (surface->visframe == g_state.frameCount)
+        if (!(s_surfaceVisBits[i >> 5] & (1 << (i & 31))))
         {
-            // already added
             continue;
         }
 
-        surface->visframe = g_state.frameCount;
-        AddSurface(model, surface);
+        gl3_surface_t *surface = &g_worldmodel->surfaces[i];
+        if ((surface->flags & SURF_BACK) != sideFlag)
+        {
+            continue;
+        }
+
+        AddSurface_NoDecals(surface);
+        internalSurfaceDecals(g_worldmodel, i);
     }
+
+    TraverseTree_r(node->children[!side]);
 }
 
-static void LinkLeaves(gl3_worldmodel_t *worldmodel)
+static void LinkLeaves()
 {
     pvsUpdate(g_state.viewOrigin);
 
-    for (int i = 0; i < g_pvsLeafCount; i++)
-    {
-        gl3_leaf_t *other = g_pvsLeaves[i];
-        if (!g_state.viewFrustum.CullAABB(other->mins, other->maxs))
-        {
-            LinkLeafFaces(worldmodel, *other);
-        }
-    }
+    // would rather do this than store g_state.frameCount in gl3_surface_t
+    GL3_ASSERT(g_worldmodel->numsurfaces < MAX_SURFACES);
+    memset(s_surfaceVisBits, 0, (g_worldmodel->numsurfaces + 7) / 8);
+
+    //int clipFlags = (1 << 4) - 1;
+    TraverseTree_r(g_worldmodel->nodes);
 }
 
-
-static float ScrollAmount(cl_entity_t *entity, gl3_surface_t *surface)
+static float ScrollAmount(cl_entity_t *entity, gl3_texture_t *texture)
 {
     if (!entity)
     {
         return 0;
     }
 
-    if (!(surface->flags & SURF_SCROLL))
+    if (!(texture->surfflags & SURF_SCROLL))
     {
         return 0;
     }
@@ -302,7 +315,7 @@ static float ScrollAmount(cl_entity_t *entity, gl3_surface_t *surface)
         speed = -speed;
     }
 
-    float scroll = 1.0f / (float)surface->texture->width * g_engfuncs.GetClientTime() * speed;
+    float scroll = 1.0f / (float)texture->width * g_engfuncs.GetClientTime() * speed;
     if (scroll < 0)
     {
         return fmodf(scroll, -1);
@@ -313,10 +326,10 @@ static float ScrollAmount(cl_entity_t *entity, gl3_surface_t *surface)
     }
 }
 
-static void DrawSurfaces(gl3_worldmodel_t *worldmodel, cl_entity_t *entity, const BrushShader &shader, GLuint textureOverride)
+static void DrawSurfaces(cl_entity_t *entity, const BrushShader &shader, GLuint textureOverride)
 {
     // index buffer is dynamic
-    commandBindVertexBuffer(worldmodel->vertex_buffer, g_brushVertexFormat);
+    commandBindVertexBuffer(g_worldmodel->vertex_buffer, g_brushVertexFormat);
 
     float prevScroll = 0;
     commandUniform1f(shader.u_scroll, prevScroll);
@@ -326,16 +339,35 @@ static void DrawSurfaces(gl3_worldmodel_t *worldmodel, cl_entity_t *entity, cons
         commandBindTexture(0, GL_TEXTURE_2D, textureOverride);
     }
 
-    for (int i = 0; i < worldmodel->numtextures; i++)
+    for (int i = 0; i < g_worldmodel->numtextures; i++)
     {
-        gl3_texture_t *texture = &worldmodel->textures[i];
-        gl3_surface_t *chain = texture->texturechain;
-        if (!chain)
+        gl3_texture_t *texture = &g_worldmodel->textures[i];
+        if (!texture->numdrawsurfaces)
         {
             continue;
         }
 
-        texture->texturechain = nullptr;
+        if (texture->surfflags & SURF_WATER)
+        {
+            // drawn later
+            s_hasWaterSurfaces = true;
+            continue;
+        }
+
+        if (texture->surfflags & SURF_SKY)
+        {
+            // drawn later
+            s_hasSkySurfaces = true;
+            continue;
+        }
+
+        float scroll = ScrollAmount(entity, texture);
+        if (scroll != prevScroll)
+        {
+            DrawIndexBuffer(texture->basevertex);
+            prevScroll = scroll;
+            commandUniform1f(shader.u_scroll, prevScroll);
+        }
 
         if (!textureOverride)
         {
@@ -343,71 +375,76 @@ static void DrawSurfaces(gl3_worldmodel_t *worldmodel, cl_entity_t *entity, cons
             commandBindTexture(0, GL_TEXTURE_2D, textureName);
         }
 
-        for (gl3_surface_t *surface = chain; surface; surface = surface->texturechain)
+        for (int j = 0; j < texture->numdrawsurfaces; j++)
         {
-            float scroll = ScrollAmount(entity, surface);
-            if (scroll != prevScroll)
-            {
-                DrawIndexBuffer();
-                prevScroll = scroll;
-                commandUniform1f(shader.u_scroll, prevScroll);
-            }
-
+            gl3_surface_t *surface = texture->drawsurfaces[j];
             AddSurfaceToIndexBuffer(surface);
         }
 
-        DrawIndexBuffer();
+        DrawIndexBuffer(texture->basevertex);
+
+        texture->numdrawsurfaces = 0;
     }
 }
 
 static void DrawWaterSurfaces(cl_entity_t *entity, GLuint textureOverride)
 {
-    // checked and cleared by caller
-    GL3_ASSERT(s_waterSurfaces);
-
     // restore the vertex buffer since drawing decals might have changed it
     commandBindVertexBuffer(g_worldmodel->vertex_buffer, g_brushVertexFormat);
 
+    if (textureOverride)
+    {
+        commandBindTexture(0, GL_TEXTURE_2D, textureOverride);
+    }
+
     waterDrawBegin();
 
-    GLuint prevTexture = textureOverride;
-    commandBindTexture(0, GL_TEXTURE_2D, prevTexture);
+    // like in opengl, water color is determined by the last surface drawn
+    int lastDrawnTexture = -1;
 
-    // very hacky!!!
-    int textureIndex = s_waterSurfaces->texture - g_worldmodel->textures;
-    g_state.waterColor = internalWaterColor(g_worldmodel->engine_model, textureIndex);
-
-    for (gl3_surface_t *surface = s_waterSurfaces; surface; surface = surface->texturechain)
+    for (int i = 0; i < g_worldmodel->numtextures; i++)
     {
-        gl3_texture_t *texture = surface->texture;
+        gl3_texture_t *texture = &g_worldmodel->textures[i];
+        if (!texture->numdrawsurfaces)
+        {
+            continue;
+        }
 
-        // shouldn't happen anymore
-        GL3_ASSERT(texture->gl_texturenum);
+        if (!(texture->surfflags & SURF_WATER))
+        {
+            continue;
+        }
+
+        lastDrawnTexture = i;
 
         if (!textureOverride)
         {
             GLuint textureName = TextureAnimation(entity, texture)->gl_texturenum;
-            if (textureName != prevTexture)
-            {
-                DrawIndexBuffer();
-                prevTexture = textureName;
-                commandBindTexture(0, GL_TEXTURE_2D, prevTexture);
-            }
+            commandBindTexture(0, GL_TEXTURE_2D, textureName);
         }
 
-        AddSurfaceToIndexBuffer(surface);
+        for (int j = 0; j < texture->numdrawsurfaces; j++)
+        {
+            gl3_surface_t *surface = texture->drawsurfaces[j];
+            AddSurfaceToIndexBuffer(surface);
+        }
+
+        DrawIndexBuffer(texture->basevertex);
+
+        texture->numdrawsurfaces = 0;
     }
 
-    DrawIndexBuffer();
+    
+    if (lastDrawnTexture != -1)
+    {
+        g_state.waterColor = internalWaterColor(g_worldmodel->engine_model, lastDrawnTexture);
+    }
 
     waterDrawEnd();
 }
 
 static void DrawSkySurfaces()
 {
-    // checked and cleared by caller
-    GL3_ASSERT(s_skySurfaces);
-
     if (!skyboxDrawBegin())
     {
         // nothing to draw
@@ -417,109 +454,113 @@ static void DrawSkySurfaces()
     // restore the vertex buffer since drawing decals might have changed it
     commandBindVertexBuffer(g_worldmodel->vertex_buffer, g_brushVertexFormat);
 
-    for (gl3_surface_t *surface = s_skySurfaces; surface; surface = surface->texturechain)
+    for (int i = 0; i < g_worldmodel->numtextures; i++)
     {
-        AddSurfaceToIndexBuffer(surface);
-    }
+        gl3_texture_t *texture = &g_worldmodel->textures[i];
+        if (!texture->numdrawsurfaces)
+        {
+            continue;
+        }
 
-    DrawIndexBuffer();
+        if (!(texture->surfflags & SURF_SKY))
+        {
+            continue;
+        }
+
+        for (int j = 0; j < texture->numdrawsurfaces; j++)
+        {
+            gl3_surface_t *surface = texture->drawsurfaces[j];
+            AddSurfaceToIndexBuffer(surface);
+        }
+
+        DrawIndexBuffer(texture->basevertex);
+
+        texture->numdrawsurfaces = 0;
+    }
 
     skyboxDrawEnd();
 }
 
-static BrushShader &SelectShader(const BrushShaderOptions &options, bool alphaTest)
-{
-    if (!options.lightmapped)
-    {
-        return s_shaderNoLighting;
-    }
-
-    if (alphaTest)
-    {
-        return s_shaderAlphaTest;
-    }
-
-    return s_shader;
-}
-
 // draws all surfaces, decals, water and sky associated with this model
-static void DrawAllSurfaces(gl3_worldmodel_t *worldmodel, cl_entity_t *entity, const BrushShaderOptions &options, GLuint textureOverride, bool alphaTest)
+static void DrawAllSurfaces(cl_entity_t *entity, BrushShader &shader, GLuint textureOverride)
 {
-    BrushShader &shader = SelectShader(options, alphaTest);
-
     commandUseProgram(&shader);
 
-    DrawSurfaces(worldmodel, entity, shader, textureOverride);
+    DrawSurfaces(entity, shader, textureOverride);
 
     // decal indices are stuffed into the same index buffer
-    decalDrawAll(g_dynamicIndexState);
+    GL3_ASSERT(s_indexCount == s_indexLastDraw);
+    s_indexCount = decalDrawAll(s_indexSpan.data, s_indexSpan.byteOffset, s_indexCount);
+    s_indexLastDraw = s_indexCount;
 
-    if (s_waterSurfaces)
+    if (s_hasWaterSurfaces)
     {
         DrawWaterSurfaces(entity, textureOverride);
-        s_waterSurfaces = nullptr;
+        s_hasWaterSurfaces = false;
     }
 
-    if (s_skySurfaces)
+    if (s_hasSkySurfaces)
     {
         DrawSkySurfaces();
-        s_skySurfaces = nullptr;
+        s_hasSkySurfaces = false;
     }
 }
 
-static void BrushModelBounds(cl_entity_t *entity, Vector3 &mins, Vector3 &maxs)
+static void BrushModelCenterExtents(cl_entity_t *entity, Vector3 &center, Vector3 &extents)
 {
     model_t *model = entity->model;
 
     if (!VectorIsZero(entity->angles))
     {
-        Vector3 radius{ model->radius, model->radius, model->radius };
-        mins = entity->origin - radius;
-        maxs = entity->origin + radius;
+        center = entity->origin;
+        extents = { model->radius, model->radius, model->radius };
     }
     else
     {
-        mins = entity->origin + model->mins;
-        maxs = entity->origin + model->maxs;
+        center = entity->origin + (model->mins + model->maxs) * 0.5f;
+        extents = (model->maxs - model->mins) * 0.5f;
     }
 }
 
 static bool CullBrushModel(cl_entity_t *entity)
 {
-    Vector3 mins, maxs;
-    BrushModelBounds(entity, mins, maxs);
-    return g_state.viewFrustum.CullAABB(mins, maxs);
+    Vector3 center, extents;
+    BrushModelCenterExtents(entity, center, extents);
+    return g_state.viewFrustum.CullBox(center, extents);
 }
 
-static void LinkAndDrawBrushModel(gl3_worldmodel_t *worldmodel, cl_entity_t *entity, const BrushShaderOptions &options, bool alphaTest)
+static void LinkAndDrawBrushModel(cl_entity_t *entity, BrushShader &shader)
 {
     // FIXME: this is assuming all brush models are inline models
     model_t *model = entity->model;
 
-    // redundant computation (already done with bmodel cull)
-    Vector3 mins, maxs;
-    BrushModelBounds(entity, mins, maxs);
-
     // no decals on alpha tested surfaces
-    bool decals = (entity->curstate.rendermode != kRenderTransAlpha);
+    bool addDecals = (entity->curstate.rendermode != kRenderTransAlpha);
 
-    for (int i = 0; i < model->nummodelsurfaces; i++)
+    int begin = model->firstmodelsurface;
+    int end = begin + model->nummodelsurfaces;
+
+    for (int surfaceIndex = begin; surfaceIndex < end; surfaceIndex++)
     {
-        gl3_surface_t *surface = &worldmodel->surfaces[model->firstmodelsurface + i];
-        gl3_plane_t *plane = surface->plane;
+        gl3_surface_t *surface = &g_worldmodel->surfaces[surfaceIndex];
 
-        // FIXME: confusing and ugly...
+        // cull non-top water faces
         if (surface->flags & SURF_WATER)
         {
-            if (plane->type != PLANE_Z || mins.z + 1 >= plane->dist)
+            gl3_plane_t *plane = surface->plane;
+            if (plane->normal.z < 0.9f)
             {
                 // get culled fuckass
                 continue;
             }
         }
 
-        // entity backfaces are not culled
-        AddSurface(worldmodel, surface, decals, false);
+        AddSurface_NoDecals(surface);
+
+        if (addDecals)
+        {
+            internalSurfaceDecals(g_worldmodel, surfaceIndex);
+        }
     }
 
     // stupid hack for color rendermode
@@ -530,7 +571,7 @@ static void LinkAndDrawBrushModel(gl3_worldmodel_t *worldmodel, cl_entity_t *ent
         textureOverride = g_state.whiteTexture;
     }
 
-    DrawAllSurfaces(worldmodel, entity, options, textureOverride, alphaTest);
+    DrawAllSurfaces(entity, shader, textureOverride);
 }
 
 static void SetupConstantBuffer(cl_entity_t *entity, const Vector4 &renderColor)
@@ -549,17 +590,18 @@ static void SetupConstantBuffer(cl_entity_t *entity, const Vector4 &renderColor)
     constants.renderColor = renderColor;
 
     BufferSpan span = dynamicUniformData(&constants, sizeof(constants));
-    commandBindUniformBuffer(1, span.buffer, span.offset, sizeof(constants));
+    commandBindUniformBuffer(1, span.buffer, span.byteOffset, sizeof(constants));
 }
 
-static void LinkAndDrawWorldModel(const BrushShaderOptions &options)
+static void LinkAndDrawWorldModel(BrushShader &shader)
 {
     SetupConstantBuffer(nullptr, { 1, 1, 1, 1 });
 
     // setup texturechains, water chain and decals
-    LinkLeaves(g_worldmodel);
+    LinkLeaves();
 
-    DrawAllSurfaces(g_worldmodel, nullptr, options, 0, false);
+    // no associated entity, no texture override
+    DrawAllSurfaces(nullptr, shader, 0);
 }
 
 void brushDrawSolids(
@@ -568,17 +610,17 @@ void brushDrawSolids(
     cl_entity_t **alphaEntities,
     int alphaEntityCount)
 {
-    MapIndexBuffer();
+    MapIndexBuffer(g_worldmodel->max_index_count);
 
     // lightmap only used for solid brush entities
     commandBindTexture(1, GL_TEXTURE_2D, g_worldmodel->lightmap_texture);
 
     // draw fully opaque stuff
     {
-        BrushShaderOptions options;
-        options.lightmapped = true;
+        // lightmapped, not alpha tested
+        BrushShader &shader = s_shader;
 
-        LinkAndDrawWorldModel(options);
+        LinkAndDrawWorldModel(shader);
 
         for (int i = 0; i < entityCount; i++)
         {
@@ -589,14 +631,14 @@ void brushDrawSolids(
             }
 
             SetupConstantBuffer(entities[i], { 1, 1, 1, 1 });
-            LinkAndDrawBrushModel(g_worldmodel, entities[i], options, false);
+            LinkAndDrawBrushModel(entities[i], shader);
         }
     }
 
     // draw alpha tested stuff
     {
-        BrushShaderOptions options;
-        options.lightmapped = true;
+        // lightmapped, alpha tested
+        BrushShader &shader = s_shaderAlphaTest;
 
         for (int i = 0; i < alphaEntityCount; i++)
         {
@@ -607,7 +649,7 @@ void brushDrawSolids(
             }
 
             SetupConstantBuffer(alphaEntities[i], { 1, 1, 1, 1 });
-            LinkAndDrawBrushModel(g_worldmodel, alphaEntities[i], options, true);
+            LinkAndDrawBrushModel(alphaEntities[i], shader);
         }
     }
 
@@ -666,16 +708,16 @@ void brushDrawTranslucent(cl_entity_t *entity, float blend)
         return;
     }
 
-    MapIndexBuffer();
+    MapIndexBuffer(g_worldmodel->max_submodel_index_count);
 
-    BrushShaderOptions options;
-    options.lightmapped = false;
+    // not lightmapped or alpha tested
+    BrushShader &shader = s_shaderNoLighting;
 
     Vector4 renderColor;
     SetBlendingAndGetColor(entity, renderColor, blend);
 
     SetupConstantBuffer(entity, renderColor);
-    LinkAndDrawBrushModel(g_worldmodel, entity, options, false);
+    LinkAndDrawBrushModel(entity, shader);
 
     UnmapIndexBuffer();
 }

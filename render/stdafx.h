@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <xmmintrin.h>
+
 #ifndef NDEBUG
 #define SCHIZO_DEBUG
 #endif

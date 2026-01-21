@@ -7,9 +7,8 @@ uniform sampler2D u_bumpmap;
 uniform int u_flags;
 
 in vec2 f_texCoord;
-in vec3 f_position;
 in vec3 f_normal;
-
+in vec3 f_lightDirs[STUDIO_MAX_ELIGHTS];
 in float f_fogFactor;
 
 out vec4 fragColor;
@@ -33,19 +32,19 @@ float ApplyBrightness(float value)
     return pow(value, float(1.0 / k_gamma));
 }
 
-vec3 ApplyElights(vec3 srgb, vec3 normal, vec3 position)
+vec3 ApplyElights(vec3 srgb, vec3 normal)
 {
     vec3 elights = vec3(0.0);
 
     for(int i = 0; i < STUDIO_MAX_ELIGHTS; i++)
     {
         // NOTE: not normalized
-        vec3 direction = elightPositions[i].xyz - position;
+        vec3 direction = f_lightDirs[i];
         float NdotL = max(dot(normal, direction), 0.0);
 
         // wtf is this attenuation
         float magnitudeSquared = dot(direction, direction);
-        float radiusSquared = elightPositions[i].w;
+        float radiusSquared = elightColors[i].w;
 
         float magrsqrt = inversesqrt(magnitudeSquared);
         float attenuation = radiusSquared * (magrsqrt * magrsqrt * magrsqrt);
@@ -58,8 +57,10 @@ vec3 ApplyElights(vec3 srgb, vec3 normal, vec3 position)
     return pow(linear, vec3(1.0 / k_gamma));
 }
 
-vec3 StudioLighting(vec3 normal, vec3 position)
+vec3 StudioLighting()
 {
+    vec3 normal = normalize(f_normal);
+
     float diffuse;
     if ((u_flags & STUDIO_SHADER_FLATSHADE) != 0)
     {
@@ -84,13 +85,13 @@ vec3 StudioLighting(vec3 normal, vec3 position)
 
     if ((u_flags & STUDIO_SHADER_ELIGHTS) != 0)
     {
-        result = ApplyElights(result, normal, position);
+        result = ApplyElights(result, normal);
     }
 
     return result;
 }
 
-vec4 ComputeColor(vec3 normal, vec3 position)
+vec4 ComputeColor()
 {
     if ((u_flags & STUDIO_SHADER_COLOR_ONLY) != 0)
     {
@@ -99,12 +100,12 @@ vec4 ComputeColor(vec3 normal, vec3 position)
     }
 
     vec4 result;
-    
+
     // compute lighting, alpha as-is
     bool fullbright = (u_flags & STUDIO_SHADER_FULLBRIGHT) != 0;
-    result.rgb = fullbright ? vec3(1.0, 1.0, 1.0) : StudioLighting(normal, position);
+    result.rgb = fullbright ? vec3(1.0, 1.0, 1.0) : StudioLighting();
     result.a = renderColor.a;
-    
+
     return result;
 }
 
@@ -121,7 +122,7 @@ void main()
     }
 #endif
 
-    fragColor = albedo * ComputeColor(normalize(f_normal), f_position);
+    fragColor = albedo * ComputeColor();
 
     fragColor.rgb = mix(fogColor.rgb, fragColor.rgb, f_fogFactor);
 }

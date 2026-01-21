@@ -12,6 +12,35 @@
 namespace Render
 {
 
+constexpr unsigned MaxTextureUnits = 4;
+
+// shadowing state to reduce command buffer sizes, overhead is negligible
+// exposed in header for immediate.cpp (FIXME: does it really need this?)
+struct ShadowState
+{
+    GLboolean blendEnable{ GL_FALSE };
+    GLenum blendSrc{};
+    GLenum blendDst{};
+
+    GLboolean depthTest{ GL_TRUE };
+    GLenum depthFunc{};
+    GLboolean depthMask{ GL_TRUE };
+
+    GLboolean cullFace{ GL_TRUE };
+
+    GLuint vertexBuffer{};
+    GLuint indexBuffer{};
+    const VertexFormat *vertexFormat{};
+
+    GLuint textureUnit{ ~0u };
+    GLuint texture2Ds[MaxTextureUnits]{};
+    GLuint textureCubeMaps[MaxTextureUnits]{};
+
+    BaseShader *shader{};
+};
+
+extern ShadowState g_shadowState;
+
 void commandInit();
 
 void commandRecord();
@@ -44,7 +73,7 @@ void commandBindUniformBuffer(GLuint index, GLuint buffer, GLintptr offset, GLsi
 void commandBindTexture(GLuint unit, GLenum target, GLuint texture);
 
 // the the draw calls
-void commandDrawElements(GLenum mode, GLsizei count, GLenum type, GLsizei offset);
+void commandDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, GLsizei offset, GLint basevertex);
 
 }
 

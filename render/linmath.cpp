@@ -1,5 +1,4 @@
 #include "stdafx.h"
-#include <xmmintrin.h>
 #include "brush.h" // gl3_plane_t
 
 namespace Render
@@ -64,10 +63,10 @@ Matrix4 ProjectionMatrix(float fovy, float aspect, float znear, float zfar)
 
 Matrix4 operator*(const Matrix4 &a, const Matrix4 &b)
 {
-    __m128 a0 = _mm_loadu_ps(&a.m00);
-    __m128 a1 = _mm_loadu_ps(&a.m10);
-    __m128 a2 = _mm_loadu_ps(&a.m20);
-    __m128 a3 = _mm_loadu_ps(&a.m30);
+    __m128 a0 = _mm_load_ps(&a.m00);
+    __m128 a1 = _mm_load_ps(&a.m10);
+    __m128 a2 = _mm_load_ps(&a.m20);
+    __m128 a3 = _mm_load_ps(&a.m30);
 
     __m128 r0 = _mm_mul_ps(a0, _mm_set1_ps(b.m00));
     r0 = _mm_add_ps(r0, _mm_mul_ps(a1, _mm_set1_ps(b.m01)));
@@ -90,10 +89,10 @@ Matrix4 operator*(const Matrix4 &a, const Matrix4 &b)
     r3 = _mm_add_ps(r3, _mm_mul_ps(a3, _mm_set1_ps(b.m33)));
 
     Matrix4 result;
-    _mm_storeu_ps(&result.m00, r0);
-    _mm_storeu_ps(&result.m10, r1);
-    _mm_storeu_ps(&result.m20, r2);
-    _mm_storeu_ps(&result.m30, r3);
+    _mm_store_ps(&result.m00, r0);
+    _mm_store_ps(&result.m10, r1);
+    _mm_store_ps(&result.m20, r2);
+    _mm_store_ps(&result.m30, r3);
     return result;
 }
 
@@ -162,95 +161,42 @@ Matrix3x4 DiagonalMatrix3x4(float f)
     return result;
 }
 
+// absolute packed singles in your xmm0
+static __m128 AbsPS(__m128 x)
+{
+    return _mm_andnot_ps(_mm_set1_ps(-0.0f), x);
+}
+
 void ViewFrustum::Set(const Matrix4 &m)
 {
-    // LEFT RIGHT TOP BOTTOM
-    m_normals_x[0] = m.m03 + m.m00;
-    m_normals_y[0] = m.m13 + m.m10;
-    m_normals_z[0] = m.m23 + m.m20;
-    m_dists[0] = m.m33 + m.m30;
+    __m128 r0 = _mm_load_ps(&m.m00);
+    __m128 r1 = _mm_load_ps(&m.m10);
+    __m128 r2 = _mm_load_ps(&m.m20);
+    __m128 r3 = _mm_load_ps(&m.m30);
 
-    m_normals_x[1] = m.m03 - m.m00;
-    m_normals_y[1] = m.m13 - m.m10;
-    m_normals_z[1] = m.m23 - m.m20;
-    m_dists[1] = m.m33 - m.m30;
+    _MM_TRANSPOSE4_PS(r0, r1, r2, r3);
 
-    m_normals_x[2] = m.m03 - m.m01;
-    m_normals_y[2] = m.m13 - m.m11;
-    m_normals_z[2] = m.m23 - m.m21;
-    m_dists[2] = m.m33 - m.m31;
+    __m128 plane0 = _mm_add_ps(r3, r0); // LEFT
+    __m128 plane1 = _mm_sub_ps(r3, r0); // RIGHT
+    __m128 plane2 = _mm_sub_ps(r3, r1); // TOP
+    __m128 plane3 = _mm_add_ps(r3, r1); // BOTTOM
 
-    m_normals_x[3] = m.m03 + m.m01;
-    m_normals_y[3] = m.m13 + m.m11;
-    m_normals_z[3] = m.m23 + m.m21;
-    m_dists[3] = m.m33 + m.m31;
+    _MM_TRANSPOSE4_PS(plane0, plane1, plane2, plane3);
 
-    for (int i = 0; i < 4; i++)
-    {
-        Vector3 normal{ m_normals_x[i], m_normals_y[i], m_normals_z[i] };
-        float scale = 1.0f / VectorLength(normal);
-        m_normals_x[i] *= scale;
-        m_normals_y[i] *= scale;
-        m_normals_z[i] *= scale;
-        m_dists[i] *= -scale; // technically a bruh moment
-    }
-}
+    __m128 dot = _mm_mul_ps(plane0, plane0);
+    dot = _mm_add_ps(dot, _mm_mul_ps(plane1, plane1));
+    dot = _mm_add_ps(dot, _mm_mul_ps(plane2, plane2));
 
-bool ViewFrustum::CullAABB(const Vector3 &min, const Vector3 &max)
-{
-    for (int i = 0; i < 4; i++)
-    {
-        Vector3 normal{ m_normals_x[i], m_normals_y[i], m_normals_z[i] };
-        float dist = m_dists[i];
+    __m128 ilength = _mm_rsqrt_ps(dot);
 
-        Vector3 point{
-            (normal.x < 0) ? min.x : max.x,
-            (normal.y < 0) ? min.y : max.y,
-            (normal.z < 0) ? min.z : max.z
-        };
+    m_nx = _mm_mul_ps(plane0, ilength);
+    m_ny = _mm_mul_ps(plane1, ilength);
+    m_nz = _mm_mul_ps(plane2, ilength);
+    m_d = _mm_mul_ps(plane3, ilength);
 
-        if (Dot(normal, point) < dist)
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool ViewFrustum::CullSphere(const Vector3 &origin, float radius)
-{
-    for (int i = 0; i < 4; i++)
-    {
-        Vector3 normal{ m_normals_x[i], m_normals_y[i], m_normals_z[i] };
-        float dist = m_dists[i];
-
-        if (Dot(origin, normal) - dist <= -radius)
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool ViewFrustum::CullPolygon(const Vector3 (&vertices)[4])
-{
-    for (int i = 0; i < 4; ++i)
-    {
-        Vector3 normal{ m_normals_x[i], m_normals_y[i], m_normals_z[i] };
-        float dist = m_dists[i];
-
-        if (Dot(normal, vertices[0]) < dist
-            && Dot(normal, vertices[1]) < dist
-            && Dot(normal, vertices[2]) < dist
-            && Dot(normal, vertices[3]) < dist)
-        {
-            return true;
-        }
-    }
-
-    return false;
+    m_absNx = AbsPS(m_nx);
+    m_absNy = AbsPS(m_ny);
+    m_absNz = AbsPS(m_nz);
 }
 
 int BoxOnPlaneSide(const Vector3 &mins, const Vector3 &maxs, const gl3_plane_t &plane)

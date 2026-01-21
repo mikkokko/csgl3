@@ -1,8 +1,6 @@
 #ifndef STUDIOCACHE_H
 #define STUDIOCACHE_H
 
-//#define STUDIO_TANGENTS
-
 namespace Render
 {
 
@@ -10,6 +8,7 @@ struct StudioMesh
 {
     unsigned indexOffset_notbytes;
     unsigned indexCount;
+    unsigned baseVertex;
 };
 
 struct StudioSubModel
@@ -25,12 +24,18 @@ struct StudioBodypart
 struct StudioVertex
 {
     Vector3 position;
-    Vector3 normal;
     Vector2 texCoord;
-#ifdef STUDIO_TANGENTS
-    Vector4 tangent;
-#endif
+
+    // store the bone as a float so we don't have to use glVertexAttribIPointer
     float bone;
+
+    // pack normals to 24 bits... GL_INT_2_10_10_10_REV not available
+    // and this is generally enough resolution (valve studiomdl quantizes
+    // to 2 degrees of accuracy, int8 component should have around 0.6)
+    int8_t normal[4];
+
+    // could use for tangent or smooth normals
+    int8_t padding[4];
 };
 
 struct StudioCache
@@ -40,7 +45,6 @@ struct StudioCache
 
     StudioBodypart *bodyparts;
 
-    int indexSize;
     GLuint vertexBuffer;
     GLuint indexBuffer;
 };

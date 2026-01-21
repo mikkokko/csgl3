@@ -5,10 +5,7 @@
 namespace Render
 {
 
-static int s_pvsFrame;
-
-int g_pvsLeafCount;
-gl3_leaf_t *g_pvsLeaves[32768];
+int g_pvsFrame;
 
 static gl3_leaf_t *LeafAtPoint(const Vector3 &point)
 {
@@ -33,17 +30,18 @@ static gl3_leaf_t *LeafAtPoint(const Vector3 &point)
 static void MarkNodesVisible(gl3_leaf_t *leaf)
 {
     gl3_node_t *node = reinterpret_cast<gl3_node_t *>(leaf);
-    while (node && node->pvsframe != s_pvsFrame)
+    while (node && node->pvsframe != g_pvsFrame)
     {
-        node->pvsframe = s_pvsFrame;
+        node->pvsframe = g_pvsFrame;
         node = node->parent;
     }
 }
 
 void pvsUpdate(const Vector3 &point)
 {
-    static gl3_leaf_t *lastLeaf;
     gl3_leaf_t *leaf = LeafAtPoint(g_state.viewOrigin);
+
+    static gl3_leaf_t *lastLeaf;
     if (leaf == lastLeaf)
     {
         // no change
@@ -51,9 +49,7 @@ void pvsUpdate(const Vector3 &point)
     }
 
     lastLeaf = leaf;
-    s_pvsFrame++;
-
-    g_pvsLeafCount = 0;
+    g_pvsFrame++;
 
     byte *visdata = leaf->compressed_vis;
 
@@ -65,10 +61,8 @@ void pvsUpdate(const Vector3 &point)
             gl3_leaf_t *other = &g_worldmodel->leafs[i];
             if (other->has_visible_surfaces)
             {
-                g_pvsLeaves[g_pvsLeafCount++] = other;
+                MarkNodesVisible(other);
             }
-
-            MarkNodesVisible(other);
         }
 
         return;
@@ -90,10 +84,8 @@ void pvsUpdate(const Vector3 &point)
                 gl3_leaf_t *other = &g_worldmodel->leafs[i];
                 if (other->has_visible_surfaces)
                 {
-                    g_pvsLeaves[g_pvsLeafCount++] = other;
+                    MarkNodesVisible(other);
                 }
-
-                MarkNodesVisible(other);
             }
         }
     }
@@ -101,15 +93,12 @@ void pvsUpdate(const Vector3 &point)
 
 gl3_node_t *pvsNode(gl3_node_t *node, const Vector3 &mins, const Vector3 &maxs)
 {
-    if (node->pvsframe != s_pvsFrame)
+    if (node->pvsframe != g_pvsFrame)
     {
         return nullptr;
     }
 
-    if (node->contents == CONTENT_SOLID)
-    {
-        return nullptr;
-    }
+    GL3_ASSERT(node->contents != CONTENTS_SOLID);
 
     if (node->contents < 0)
     {

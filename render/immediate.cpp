@@ -11,43 +11,18 @@ struct ImmediateVertex
 {
     Vector3 position;
     Vector2 texCoord;
-    Vector4 color;
-};
-
-struct ImmediateState
-{
-    bool active{ false };
-
-    GLboolean blendEnable{ GL_FALSE };
-    GLenum blendSrc{};
-    GLenum blendDst{};
-
-    GLboolean depthTest{ GL_TRUE };
-    GLboolean depthMask{ GL_TRUE };
-
-    GLboolean cullFace{ GL_TRUE };
-
-    GLuint texture{};
+    uint8_t color[4];
+    uint8_t padding[8];
 };
 
 static const VertexAttrib s_vertexAttribs[] = {
     VERTEX_ATTRIB(ImmediateVertex, position),
     VERTEX_ATTRIB(ImmediateVertex, texCoord),
-    VERTEX_ATTRIB(ImmediateVertex, color),
+    VERTEX_ATTRIB_NORM(ImmediateVertex, color),
     VERTEX_ATTRIB_TERM()
 };
 
 static const VertexFormat s_vertexFormat{ s_vertexAttribs, sizeof(ImmediateVertex) };
-
-// shadowed state for batching
-static ImmediateState s_state;
-
-// Begin/End scope
-static ImmediateVertex *s_vertexWrite;
-static GLushort s_vertexWriteCount;
-static GLenum s_primitive;
-static Vector4 s_currentColor;
-static Vector2 s_currentTexCoord;
 
 class SpriteShader : public BaseShader
 {
@@ -85,20 +60,42 @@ public:
 static SpriteShader s_shader;
 static SpriteShaderAlphaTest s_shaderAlphaTest;
 
+static bool s_active;
+
+static BufferSpanT<ImmediateVertex> s_vertexSpan;
+static BufferSpanT<uint16_t> s_indexSpan;
+static int s_totalVertexCount;
+static int s_totalIndexCount;
+static int s_lastDrawIndexCount;
+static GLenum s_currentMode;
+static int s_primitiveVertexCount;
+static int s_primitiveStartVertex;
+
+// current vertex attributes
+static Vector4 s_currentColor;
+static Vector2 s_currentTexCoord;
+
 static void Flush()
 {
-    GL3_ASSERT(s_state.active);
-    GL3_ASSERT(s_vertexWriteCount == 0);
-
-    int indexByteOffset;
-    int indexCount = g_dynamicIndexState.UpdateDrawOffset(indexByteOffset);
+    int indexCount = s_totalIndexCount - s_lastDrawIndexCount;
     if (!indexCount)
     {
-        // FIXME: if lines are ever supported, this won't work as they're not indexed
         return;
     }
 
-    commandDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_SHORT, indexByteOffset);
+    GL3_ASSERT(indexCount > 0);
+
+    int indexOffset = s_indexSpan.byteOffset + s_lastDrawIndexCount * sizeof(uint16_t);
+    int baseVertex = s_vertexSpan.byteOffset / sizeof(ImmediateVertex);
+
+    commandDrawElementsBaseVertex(
+        GL_TRIANGLES,
+        indexCount,
+        GL_UNSIGNED_SHORT,
+        indexOffset,
+        baseVertex);
+
+    s_lastDrawIndexCount = s_totalIndexCount;
 }
 
 void immediateInit()
@@ -107,18 +104,25 @@ void immediateInit()
     shaderRegister(s_shaderAlphaTest);
 }
 
+// FIXME: isn't this too small? our dynamic vertex buffers are tiny
+constexpr int MaxVertexCount = 8192;
+
+// all quads is the worst case for now
+constexpr int MaxIndexCount = (MaxVertexCount * 3) / 2;
+
 void immediateDrawStart(bool alphaTest)
 {
-    GL3_ASSERT(!s_state.active);
-    s_state.active = true;
+    GL3_ASSERT(!s_active);
+    s_active = true;
 
-    GL3_ASSERT(s_vertexWriteCount == 0);
+    s_vertexSpan = dynamicVertexDataBegin<ImmediateVertex>(MaxVertexCount);
+    s_indexSpan = dynamicIndexDataBegin<uint16_t>(MaxIndexCount);
+    s_totalVertexCount = 0;
+    s_totalIndexCount = 0;
+    s_lastDrawIndexCount = 0;
 
-    g_dynamicVertexState.Lock(sizeof(ImmediateVertex));
-    g_dynamicIndexState.Lock(sizeof(GLushort));
-
-    commandBindVertexBuffer(g_dynamicVertexState.VertexBuffer(), s_vertexFormat);
-    commandBindIndexBuffer(g_dynamicIndexState.IndexBuffer());
+    commandBindVertexBuffer(s_vertexSpan.buffer, s_vertexFormat);
+    commandBindIndexBuffer(s_indexSpan.buffer);
 
     SpriteShader &shader = alphaTest ? s_shaderAlphaTest : s_shader;
     commandUseProgram(&shader);
@@ -126,206 +130,163 @@ void immediateDrawStart(bool alphaTest)
 
 void immediateDrawEnd()
 {
+    GL3_ASSERT(s_active);
+
     Flush();
 
-    GL3_ASSERT(s_vertexWriteCount == 0);
+    dynamicVertexDataEnd<ImmediateVertex>(s_totalVertexCount);
+    dynamicIndexDataEnd<uint16_t>(s_totalIndexCount);
 
     // restore state... this is dumb but no other way currently
-    {
-        if (s_state.blendEnable)
-        {
-            commandBlendEnable(GL_FALSE);
-        }
+    commandBlendEnable(GL_FALSE);
+    commandDepthTest(GL_TRUE);
+    commandDepthMask(GL_TRUE);
+    commandCullFace(GL_TRUE);
 
-        if (!s_state.depthTest)
-        {
-            commandDepthTest(GL_TRUE);
-        }
-
-        if (!s_state.depthMask)
-        {
-            commandDepthMask(GL_TRUE);
-        }
-
-        if (!s_state.cullFace)
-        {
-            commandCullFace(GL_TRUE);
-        }
-    }
-
-    GL3_ASSERT(s_state.active);
-    s_state = {}; // FIXME: not necessarily needed
-
-    g_dynamicVertexState.Unlock();
-    g_dynamicIndexState.Unlock();
+    s_active = false;
 }
 
 bool immediateIsActive()
 {
-    return s_state.active;
+    return s_active;
 }
 
 void immediateBlendEnable(GLboolean enable)
 {
-    GL3_ASSERT(s_state.active);
+    GL3_ASSERT(s_active);
 
-    if (s_state.blendEnable != enable)
+    if (g_shadowState.blendEnable != enable)
     {
         Flush();
-        s_state.blendEnable = enable;
         commandBlendEnable(enable);
     }
 }
 
 void immediateBlendFunc(GLenum sfactor, GLenum dfactor)
 {
-    GL3_ASSERT(s_state.active);
+    GL3_ASSERT(s_active);
 
-    if (s_state.blendSrc != sfactor || s_state.blendDst != dfactor)
+    if (g_shadowState.blendSrc != sfactor || g_shadowState.blendDst != dfactor)
     {
         Flush();
-        s_state.blendSrc = sfactor;
-        s_state.blendDst = dfactor;
         commandBlendFunc(sfactor, dfactor);
     }
 }
 
 void immediateCullFace(GLboolean enable)
 {
-    GL3_ASSERT(s_state.active);
+    GL3_ASSERT(s_active);
 
-    if (s_state.cullFace != enable)
+    if (g_shadowState.cullFace != enable)
     {
         Flush();
-        s_state.cullFace = enable;
         commandCullFace(enable);
     }
 }
 
 void immediateDepthTest(GLboolean enable)
 {
-    GL3_ASSERT(s_state.active);
+    GL3_ASSERT(s_active);
 
-    if (s_state.depthTest != enable)
+    if (g_shadowState.depthTest != enable)
     {
         Flush();
-        s_state.depthTest = enable;
         commandDepthTest(enable);
     }
 }
 
 void immediateDepthMask(GLboolean flag)
 {
-    GL3_ASSERT(s_state.active);
+    GL3_ASSERT(s_active);
 
-    if (s_state.depthMask != flag)
+    if (g_shadowState.depthMask != flag)
     {
         Flush();
-        s_state.depthMask = flag;
         commandDepthMask(flag);
     }
 }
 
 void immediateBindTexture(GLuint texture)
 {
-    GL3_ASSERT(s_state.active);
+    GL3_ASSERT(s_active);
 
-    if (s_state.texture != texture)
+    if (g_shadowState.texture2Ds[0] != texture)
     {
         Flush();
-        s_state.texture = texture;
         commandBindTexture(0, GL_TEXTURE_2D, texture);
     }
 }
 
 void immediateBegin(GLenum mode)
 {
-    GL3_ASSERT(s_state.active);
+    GL3_ASSERT(s_active);
 
-    GL3_ASSERT(mode == GL_TRIANGLES
-        //|| mode == GL_TRIANGLE_FAN
-        || mode == GL_QUADS
-        //|| mode == GL_POLYGON
-        //|| mode == GL_LINES
-        //|| mode == GL_TRIANGLE_STRIP
-        //|| mode == GL_QUAD_STRIP
-    );
-
-    s_primitive = mode;
-    GL3_ASSERT(s_vertexWriteCount == 0);
-    s_vertexWrite = static_cast<ImmediateVertex *>(g_dynamicVertexState.BeginWrite());
+    s_currentMode = mode;
+    s_primitiveVertexCount = 0;
+    s_primitiveStartVertex = s_totalVertexCount;
 }
 
 void immediateColor4f(float r, float g, float b, float a)
 {
-    GL3_ASSERT(s_state.active);
-
-    s_currentColor.x = r;
-    s_currentColor.y = g;
-    s_currentColor.z = b;
-    s_currentColor.w = a;
+    GL3_ASSERT(s_active);
+    s_currentColor = { r, g, b, a };
 }
 
 void immediateTexCoord2f(float s, float t)
 {
-    GL3_ASSERT(s_state.active);
-    s_currentTexCoord.x = s;
-    s_currentTexCoord.y = t;
+    GL3_ASSERT(s_active);
+    s_currentTexCoord = { s, t };
 }
 
 void immediateVertex3f(float x, float y, float z)
 {
-    GL3_ASSERT(s_state.active);
+    GL3_ASSERT(s_active);
 
-    ImmediateVertex &vertex = s_vertexWrite[s_vertexWriteCount++];
-    vertex.position.x = x;
-    vertex.position.y = y;
-    vertex.position.z = z;
-    vertex.texCoord = s_currentTexCoord;
-    vertex.color = s_currentColor;
+    ImmediateVertex *v = &s_vertexSpan.data[s_totalVertexCount];
+    v->position = { x, y, z };
+    v->texCoord = s_currentTexCoord;
+    v->color[0] = static_cast<uint8_t>(s_currentColor.x * 255.0f);
+    v->color[1] = static_cast<uint8_t>(s_currentColor.y * 255.0f);
+    v->color[2] = static_cast<uint8_t>(s_currentColor.z * 255.0f);
+    v->color[3] = static_cast<uint8_t>(s_currentColor.w * 255.0f);
+
+    s_totalVertexCount++;
+    s_primitiveVertexCount++;
 }
 
 void immediateEnd()
 {
-    GL3_ASSERT(s_state.active);
+    GL3_ASSERT(s_active);
 
-    GLushort indexBase = (GLushort)g_dynamicVertexState.IndexBase();
-
-    GLushort *indices = static_cast<GLushort *>(g_dynamicIndexState.BeginWrite());
-    GLushort *index = indices;
-
-    switch (s_primitive)
+    if (s_currentMode == GL_TRIANGLES)
     {
-    case GL_TRIANGLES:
-        for (GLushort i = 0; i < s_vertexWriteCount; i += 3, index += 3)
+        int triangleCount = s_primitiveVertexCount / 3;
+        for (int i = 0; i < triangleCount; i++)
         {
-            index[0] = indexBase + i;
-            index[1] = indexBase + i + 1;
-            index[2] = indexBase + i + 2;
+            uint16_t base = static_cast<uint16_t>(s_primitiveStartVertex + i * 3);
+            s_indexSpan.data[s_totalIndexCount++] = base + 0;
+            s_indexSpan.data[s_totalIndexCount++] = base + 1;
+            s_indexSpan.data[s_totalIndexCount++] = base + 2;
         }
-        break;
-
-    case GL_QUADS:
-        for (GLushort i = 0; i < s_vertexWriteCount; i += 4, index += 6)
-        {
-            index[0] = indexBase + i;
-            index[1] = indexBase + i + 1;
-            index[2] = indexBase + i + 2;
-            index[3] = indexBase + i;
-            index[4] = indexBase + i + 2;
-            index[5] = indexBase + i + 3;
-        }
-        break;
-
-    default:
-        GL3_ASSERT(false);
-        break;
     }
-
-    g_dynamicIndexState.FinishWrite(index - indices);
-
-    g_dynamicVertexState.FinishWrite(s_vertexWriteCount);
-    s_vertexWriteCount = 0;
+    else if (s_currentMode == GL_QUADS)
+    {
+        int quadCount = s_primitiveVertexCount / 4;
+        for (int i = 0; i < quadCount; i++)
+        {
+            uint16_t base = static_cast<uint16_t>(s_primitiveStartVertex + i * 4);
+            s_indexSpan.data[s_totalIndexCount++] = base + 0;
+            s_indexSpan.data[s_totalIndexCount++] = base + 1;
+            s_indexSpan.data[s_totalIndexCount++] = base + 2;
+            s_indexSpan.data[s_totalIndexCount++] = base + 0;
+            s_indexSpan.data[s_totalIndexCount++] = base + 2;
+            s_indexSpan.data[s_totalIndexCount++] = base + 3;
+        }
+    }
+    else
+    {
+        GL3_ASSERT(false);
+    }
 }
 
 }

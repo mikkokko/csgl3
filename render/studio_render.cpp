@@ -19,8 +19,8 @@ struct StudioConstants
     Vector4 ambientAndShadeLight; // x = ambientlight, y = shadelight
     Vector4 chromeOriginAndShellScale; // chrome origin (xyz) and glowshell scale (w)
 
-    Vector4 elightPositions[STUDIO_MAX_ELIGHTS]; // 4th component stores radius^2
-    Vector4 elightColors[STUDIO_MAX_ELIGHTS];
+    Vector4 elightPositions[STUDIO_MAX_ELIGHTS];
+    Vector4 elightColors[STUDIO_MAX_ELIGHTS]; // 4th component stores radius^2
 
     // bones must be last! see StudioSetConstants
     Matrix3x4 bones[MAX_SHADER_BONES];
@@ -28,12 +28,9 @@ struct StudioConstants
 
 static const VertexAttrib s_vertexAttribs[] = {
     VERTEX_ATTRIB(StudioVertex, position),
-    VERTEX_ATTRIB(StudioVertex, normal),
     VERTEX_ATTRIB(StudioVertex, texCoord),
-#ifdef STUDIO_TANGENTS
-    VERTEX_ATTRIB(StudioVertex, tangent),
-#endif
     VERTEX_ATTRIB(StudioVertex, bone),
+    VERTEX_ATTRIB_NORM(StudioVertex, normal),
     VERTEX_ATTRIB_TERM()
 };
 
@@ -209,11 +206,12 @@ void studioEntityLight(StudioContext &context)
 
         strengths[index] = strength;
 
-        context.elightPositions[index] = { elight->origin, radiusSquared };
+        context.elightPositions[index] = elight->origin;
 
         context.elightColors[index].x = g_gammaLinearTable[elight->color.r] * (1.0f / 255.0f);
         context.elightColors[index].y = g_gammaLinearTable[elight->color.g] * (1.0f / 255.0f);
         context.elightColors[index].z = g_gammaLinearTable[elight->color.b] * (1.0f / 255.0f);
+        context.elightColors[index].w = radiusSquared;
 
         if (index >= context.elightCount)
         {
@@ -272,8 +270,8 @@ static void StudioSetConstants(StudioContext &context)
 
     for (int i = 0; i < STUDIO_MAX_ELIGHTS; i++)
     {
-        constants.elightPositions[i] = context.elightPositions[i];
-        constants.elightColors[i] = { context.elightColors[i], 1.0f };
+        constants.elightPositions[i] = { context.elightPositions[i], 0.0f };
+        constants.elightColors[i] = context.elightColors[i];
     }
 
     memcpy(static_cast<void *>(constants.bones), g_engineStudio.StudioGetBoneTransform(), sizeof(Matrix3x4) * context.header->numbones);
@@ -283,7 +281,7 @@ static void StudioSetConstants(StudioContext &context)
     int constantsSize = bonelessSize + bonesSize;
 
     BufferSpan span = dynamicUniformData(&constants, constantsSize);
-    commandBindUniformBuffer(1, span.buffer, span.offset, constantsSize);
+    commandBindUniformBuffer(1, span.buffer, span.byteOffset, constantsSize);
 }
 
 void studioSetupRenderer(StudioContext &context, int rendermode)
@@ -409,9 +407,6 @@ void studioDrawPoints(StudioContext &context)
         skins = &skins[skin * textureheader->numskinref];
     }
 
-    int indexSize = context.cache->indexSize;
-    GLenum indexType = (indexSize == 4) ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT;
-
     for (int i = 0; i < submodel->nummesh; i++)
     {
         mstudiomesh_t *mesh = &meshes[i];
@@ -435,7 +430,11 @@ void studioDrawPoints(StudioContext &context)
             commandBindTexture(0, GL_TEXTURE_2D, texture->index);
         }
 
-        commandDrawElements(GL_TRIANGLES, mem_mesh->indexCount, indexType, mem_mesh->indexOffset_notbytes * indexSize);
+        commandDrawElementsBaseVertex(GL_TRIANGLES,
+            mem_mesh->indexCount,
+            GL_UNSIGNED_SHORT,
+            mem_mesh->indexOffset_notbytes * sizeof(GLushort),
+            mem_mesh->baseVertex);
 
         if (additive)
         {

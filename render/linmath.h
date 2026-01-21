@@ -157,6 +157,11 @@ inline Vector3 operator-(const Vector3 &a)
     return { -a.x, -a.y, -a.z };
 }
 
+inline bool operator==(const Vector3 &a, const Vector3 &b)
+{
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+
 inline Vector3 VectorLerp(const Vector3 &a, const Vector3 &b, float f)
 {
     return a + (b - a) * f;
@@ -192,7 +197,7 @@ inline Vector4 operator-(const Vector4 &a)
     return { -a.x, -a.y, -a.z, -a.w };
 }
 
-struct Matrix4
+struct alignas(16) Matrix4
 {
     float m00, m01, m02, m03;
     float m10, m11, m12, m13;
@@ -215,21 +220,62 @@ struct Matrix3x4
 Matrix3x4 ModelMatrix3x4(const Vector3 &origin, const Vector3 &angles);
 Matrix3x4 DiagonalMatrix3x4(float f);
 
-class ViewFrustum
+class alignas(16) ViewFrustum
 {
 public:
     void Set(const Matrix4 &viewProjectionMatrix);
 
-    bool CullAABB(const Vector3 &min, const Vector3 &max);
-    bool CullSphere(const Vector3 &origin, float radius);
+    bool CullBox(const Vector3 &center, const Vector3 &extents)
+    {
+        __m128 cx = _mm_set1_ps(center.x);
+        __m128 cy = _mm_set1_ps(center.y);
+        __m128 cz = _mm_set1_ps(center.z);
 
-    // massively inefficient!!!
-    bool CullPolygon(const Vector3 (&vertices)[4]);
+        __m128 ex = _mm_set1_ps(extents.x);
+        __m128 ey = _mm_set1_ps(extents.y);
+        __m128 ez = _mm_set1_ps(extents.z);
 
-    float m_normals_x[4];
-    float m_normals_y[4];
-    float m_normals_z[4];
-    float m_dists[4];
+        __m128 dist = _mm_mul_ps(cx, m_nx);
+        __m128 radius = _mm_mul_ps(ex, m_absNx);
+
+        dist = _mm_add_ps(dist, _mm_mul_ps(cy, m_ny));
+        radius = _mm_add_ps(radius, _mm_mul_ps(ey, m_absNy));
+
+        dist = _mm_add_ps(dist, _mm_mul_ps(cz, m_nz));
+        radius = _mm_add_ps(radius, _mm_mul_ps(ez, m_absNz));
+
+        dist = _mm_add_ps(dist, m_d);
+
+        __m128 backMask = _mm_cmplt_ps(_mm_add_ps(dist, radius), _mm_setzero_ps());
+
+        return (_mm_movemask_ps(backMask) != 0);
+    }
+
+    bool CullSphere(const Vector3 &center, float radius)
+    {
+        __m128 cx = _mm_set1_ps(center.x);
+        __m128 cy = _mm_set1_ps(center.y);
+        __m128 cz = _mm_set1_ps(center.z);
+        __m128 r = _mm_set1_ps(radius);
+
+        __m128 dist = _mm_mul_ps(cx, m_nx);
+        dist = _mm_add_ps(dist, _mm_mul_ps(cy, m_ny));
+        dist = _mm_add_ps(dist, _mm_mul_ps(cz, m_nz));
+        dist = _mm_add_ps(dist, m_d);
+
+        __m128 backMask = _mm_cmplt_ps(_mm_add_ps(dist, r), _mm_setzero_ps());
+
+        return (_mm_movemask_ps(backMask) != 0);
+    }
+
+    __m128 m_nx;
+    __m128 m_ny;
+    __m128 m_nz;
+    __m128 m_d;
+
+    __m128 m_absNx;
+    __m128 m_absNy;
+    __m128 m_absNz;
 };
 
 // quake function for classifying an aabb against plane

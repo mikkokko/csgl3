@@ -241,11 +241,17 @@ void spriteDraw(cl_entity_t *entity, float blend)
 
     float scale = (entity->curstate.scale > 0) ? entity->curstate.scale : 1;
 
-    Vector3 right, up;
-    if (!BillboardSprite(entity, sprite.type, right, up))
+    // sloppy sphere cull
     {
-        // not visible
-        return;
+        float max_x = Q_max(fabsf(sprite.left), fabsf(sprite.right)) * scale;
+        float max_y = Q_max(fabsf(sprite.up), fabsf(sprite.down)) * scale;
+        float radius = sqrtf(max_x * max_x + max_y * max_y);
+
+        if (g_state.viewFrustum.CullSphere(origin, radius))
+        {
+            // get culled idiot
+            return;
+        }
     }
 
     float scale_up = sprite.up * scale;
@@ -253,21 +259,19 @@ void spriteDraw(cl_entity_t *entity, float blend)
     float scale_left = sprite.left * scale;
     float scale_right = sprite.right * scale;
 
+    Vector3 right, up;
+    if (!BillboardSprite(entity, sprite.type, right, up))
+    {
+        // not visible
+        return;
+    }
+
     Vector3 vertices[4] = {
         origin + (up * scale_down) + (right * scale_left),
         origin + (up * scale_up) + (right * scale_left),
         origin + (up * scale_up) + (right * scale_right),
         origin + (up * scale_down) + (right * scale_right)
     };
-
-    // FIXME: should do this way earlier... the entire point of culling sprites
-    // would be that we don't do any of the extra setup associated with them
-    // also, culling vertex by vertex is inefficient, a sloppy bounding sphere would work too
-    if (g_state.viewFrustum.CullPolygon(vertices))
-    {
-        // get culled idiot
-        return;
-    }
 
     Vector4 color = SpriteColor(entity, blend);
 

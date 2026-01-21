@@ -4,16 +4,14 @@
 in vec3 a_position;
 in vec3 a_normal;
 in vec2 a_texCoord;
-//in vec4 a_tangent;
 in float a_bone;
 
 uniform bool u_viewmodel; // FIXME
 uniform int u_flags;
 
 out vec2 f_texCoord;
-out vec3 f_position;
 out vec3 f_normal;
-
+out vec3 f_lightDirs[STUDIO_MAX_ELIGHTS];
 out float f_fogFactor;
 
 vec2 ChromeTexCoords(mat3x4 bone, vec3 normal)
@@ -45,8 +43,12 @@ void main()
     // shell effect
     position += normal * shellScale;
 
-    f_position = position;
     f_normal = normal;
+
+    for (int i = 0; i < STUDIO_MAX_ELIGHTS; i++)
+    {
+        f_lightDirs[i] = elightPositions[i].xyz - position;
+    }
 
     mat4 viewProj = u_viewmodel ? vmViewProjectionMatrix : viewProjectionMatrix;
 

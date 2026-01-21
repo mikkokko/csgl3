@@ -3,6 +3,9 @@
 namespace Render
 {
 
+// for lighting cache, called every RenderScene
+void studioUpdateSkyLight(const movevars_t *movevars);
+
 bool studioFrustumCull(cl_entity_t *entity, studiohdr_t *header);
 void studioDynamicLight(cl_entity_t *entity, alight_t *light);
 
