@@ -35,7 +35,7 @@ The renderer tries to remain faithful to the engine's renderer, but there are so
 
 ## Installation
 
-* Compile and install [Client-side loader from the gl3 branch](https://github.com/mikkokko/csldr/tree/gl3)
-* Compile this project
+* Download and install [Client-side loader](https://github.com/mikkokko/csldr)
+* Download the latest release for your platform from the [releases page](https://github.com/mikkokko/csgl3/releases/latest)
 * Move `render.dll` / `render.so` to the `cl_dlls` folder (where `client.dll` / `client.so` resides)
 * Launch the game. The cvar gl3_enable should be available
