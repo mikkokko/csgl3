@@ -1,6 +1,7 @@
 #ifndef STDAFX_H
 #define STDAFX_H
 
+#include <float.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>

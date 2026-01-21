@@ -41,7 +41,7 @@ constexpr int ComponentCount(const uint16_t (*)[2]) { return 2; }
 
 #define VERTEX_ATTRIB(vertexType, name) { (int)offsetof(vertexType, name), GLType(&((vertexType *)0)->name), ComponentCount(&((vertexType *)0)->name), false, "a_" #name }
 #define VERTEX_ATTRIB_NORM(vertexType, name) { (int)offsetof(vertexType, name), GLType(&((vertexType *)0)->name), ComponentCount(&((vertexType *)0)->name), true, "a_" #name }
-#define VERTEX_ATTRIB_TERM() { 0, 0, 0, nullptr }
+#define VERTEX_ATTRIB_TERM() { 0, 0, 0, false, nullptr }
 
 }
 
