@@ -1,0 +1,113 @@
+name: build
+on:
+  push:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: windows-latest
+            name: windows
+            cmake_options: '-A Win32'
+            binary_path: 'build/Release/render.dll'
+            build_options: '--config Release'
+          - os: ubuntu-latest
+            name: linux
+            cmake_options: '-DCMAKE_BUILD_TYPE=Release'
+            binary_path: 'build/render.so'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Create build directory
+      run: cmake -E make_directory ${{github.workspace}}/build
+
+    - if: matrix.os == 'ubuntu-latest'
+      name: Install Dependencies
+      run: |-
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        sudo apt install --yes --no-install-recommends gcc-multilib g++-multilib
+
+    - name: Generate project files
+      working-directory: ${{github.workspace}}/build
+      run: |
+        cmake ${{github.workspace}} ${{ matrix.cmake_options }}
+
+    - name: Build (Release)
+      working-directory: ${{github.workspace}}/build
+      run: |
+        cmake --build . ${{ matrix.build_options }}
+
+    - name: Package
+      shell: bash
+      run: |
+        mkdir $GITHUB_WORKSPACE/release/
+        cp ${{ matrix.binary_path }} $GITHUB_WORKSPACE/release/
+        # third party licenses
+        cp external/meshoptimizer/LICENSE.md $GITHUB_WORKSPACE/release/LICENSE_meshoptimizer.txt
+
+    - name: Zip artifacts (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        OUTNAME: render-${{ matrix.os }}.zip
+      run: |
+        $out = Join-Path $env:GITHUB_WORKSPACE $env:OUTNAME
+        if (Test-Path $out) { Remove-Item $out -Force }
+        # include everything under release
+        Compress-Archive -Path (Join-Path $env:GITHUB_WORKSPACE 'release\*') -DestinationPath $out -Force
+        Get-ChildItem $out
+
+    - name: Zip artifacts (non-Windows)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        OUTNAME="render-${{ matrix.os }}.zip"
+        (cd release && zip -r "../${OUTNAME}" .)
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: artifact-${{ matrix.os }}
+        path: ${{ github.workspace }}/render-${{ matrix.os }}.zip
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create continuous release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          TAG=continuous
+          files=( $(find artifacts -type f -name "*.zip") )
+
+          # schizo check
+          if [ ${#files[@]} -gt 0 ]; then
+            gh release delete "$TAG" --cleanup-tag --repo "$REPO" --yes || true
+
+            # kludge to avoid the release being created as a draft...
+            sleep 10s
+
+            gh release create "$TAG" --repo "$REPO" \
+              --title "Continuous Build" \
+              --notes "$SHA" \
+              --target "$SHA"
+
+            gh release upload "$TAG" --repo "$REPO" "${files[@]}" --clobber
+          fi
