@@ -4,6 +4,7 @@
 ## Requirements
 
 * OpenGL 3.1 or later
+* ARB_draw_elements_base_vertex
 * Any Steam version of the game on either Windows or Linux
 
 ## Missing features
