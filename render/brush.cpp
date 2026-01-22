@@ -95,12 +95,8 @@ static BufferSpanT<uint16_t> s_indexSpan;
 static bool s_hasWaterSurfaces = false;
 static bool s_hasSkySurfaces = false;
 
-static cvar_t *gl3_brush_face_cull;
-
 void brushInit()
 {
-    gl3_brush_face_cull = g_engfuncs.pfnRegisterVariable("gl3_brush_face_cull", "1", 0);
-
     shaderRegister(s_shader);
     shaderRegister(s_shaderAlphaTest);
     shaderRegister(s_shaderNoLighting);
