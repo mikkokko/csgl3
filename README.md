@@ -39,3 +39,18 @@ The renderer tries to remain faithful to the engine's renderer, but there are so
 * Download the latest release for your platform from the [releases page](https://github.com/mikkokko/csgl3/releases/latest)
 * Move `render.dll` / `render.so` to the `cl_dlls` folder (where `client.dll` / `client.so` resides)
 * Launch the game. The cvar gl3_enable should be available
+
+## Timedemos on a low-end system
+
+Specs: AMD A6-3620, Radeon HD 6530D
+Settings: 1280x720, fullscreen, `-nofbo`
+Game build: 10210
+
+| Level | Engine renderer | GL3 renderer | Speedup |
+|-|-:|-:|-:|
+| de_dust2 | 170 | 295 | 1.7x |
+| surf_cyberwave | 29 | 129 | 4.4x |
+| chk_section | 29 | 126 | 4.3x |
+| de_safehouse_csgo | 51 | 131 | 2.6x |
+
+More powerful cards will show greater gains with the renderer, though you likely won't have issues running the game over 100 fps with these.
