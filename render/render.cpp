@@ -99,10 +99,26 @@ static cvar_t *gl_widescreen_yfov;
 static bool s_fogConstantsEnabled;
 BufferSpan s_fogConstants[2];
 
+static int Hk_CreateVisibleEntity(int type, cl_entity_t *entity)
+{
+    if (AddEntity(type, entity))
+    {
+        // was added by the renderer
+        // return value might be wrong but who gives a shit
+        return 1;
+    }
+
+    // let the engine have a whack at it
+    return g_engfuncs.CL_CreateVisibleEntity(type, entity);
+}
+
 void ModifyEngfuncs(cl_enginefunc_t *engfuncs)
 {
     // save these off so we can call them later
     g_engfuncs = *engfuncs;
+
+    // hook in case the game uses this
+    engfuncs->CL_CreateVisibleEntity = Hk_CreateVisibleEntity;
 
     // need to render crosshair ourselves, this will hook pfnSetCrosshair
     hudInit(engfuncs);
