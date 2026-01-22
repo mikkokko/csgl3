@@ -42,8 +42,8 @@ The renderer tries to remain faithful to the engine's renderer, but there are so
 
 ## Timedemos on a low-end system
 
-Specs: AMD A6-3620, Radeon HD 6530D
-Settings: 1280x720, fullscreen, `-nofbo`
+Specs: AMD A6-3620, Radeon HD 6530D\
+Settings: 1280x720, fullscreen, `-nofbo`\
 Game build: 10210
 
 | Level | Engine renderer | GL3 renderer | Speedup |
