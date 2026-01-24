@@ -15,8 +15,6 @@ static int s_red;
 static int s_green;
 static int s_blue;
 
-static void (*pfnSetCrosshair)(int, wrect_t, int, int, int);
-
 static void Hk_SetCrosshair(int hspr, wrect_t rc, int r, int g, int b)
 {
     s_sprite = hspr;
@@ -25,12 +23,11 @@ static void Hk_SetCrosshair(int hspr, wrect_t rc, int r, int g, int b)
     s_green = g;
     s_blue = b;
 
-    pfnSetCrosshair(hspr, rc, r, g, b);
+    g_engfuncs.pfnSetCrosshair(hspr, rc, r, g, b);
 }
 
 void hudInit(cl_enginefunc_t *engfuncs)
 {
-    pfnSetCrosshair = engfuncs->pfnSetCrosshair;
     engfuncs->pfnSetCrosshair = Hk_SetCrosshair;
 }
 
