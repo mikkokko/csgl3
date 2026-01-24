@@ -138,7 +138,7 @@ static int s_uniformBufferOffsetAlignment;
 
 static DynamicBuffer s_vertex{ GL_ARRAY_BUFFER, 1 << 19 };
 static DynamicBuffer s_index{ GL_ELEMENT_ARRAY_BUFFER, 1 << 19 };
-static DynamicBuffer s_uniform{ GL_UNIFORM_BUFFER, 1 << 17 };
+static DynamicBuffer s_uniform{ GL_UNIFORM_BUFFER, 1 << 19 };
 
 void dynamicBuffersInit()
 {
