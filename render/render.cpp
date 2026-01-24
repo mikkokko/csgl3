@@ -56,8 +56,8 @@ struct FrameConstants
     Vector4 lightPositions[MAX_SHADER_LIGHTS]; // w stores 1/radius
     Vector4 lightColors[MAX_SHADER_LIGHTS];
 
-    // accessed with lightstyles[i / 4][i % 4]
-    Vector4 lightstyles[MAX_LIGHTSTYLES / 4];
+    // accessed with lightstyles[i].x
+    Vector4 lightstyles[MAX_LIGHTSTYLES];
 };
 
 // must match the shader
@@ -432,8 +432,12 @@ static void UpdateFrameConstants(const Matrix4 &vmViewProjectionMatrix)
 
     frameConstants.cameraRight = { g_state.viewRight, 1 }; // temp
 
-    static_assert(sizeof(frameConstants.lightstyles) == sizeof(g_lightstyles), "wtf");
-    memcpy(frameConstants.lightstyles, g_lightstyles, sizeof(g_lightstyles));
+    static_assert(sizeof(frameConstants.lightstyles) == sizeof(g_lightstyles) * 4, "wtf");
+    for (int i = 0; i < MAX_LIGHTSTYLES; i++)
+    {
+        float value = g_lightstyles[i];
+        frameConstants.lightstyles[i] = { value, 0, 0, 0 };
+    }
 
     int numLights = 0;
 

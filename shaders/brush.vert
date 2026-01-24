@@ -23,14 +23,11 @@ void main()
     texCoord.x += u_scroll;
 
 #if !NO_LIGHTING
-    ivec4 styles = ivec4(a_styles);
-    ivec4 index1 = styles >> 2;
-    ivec4 index2 = styles & 3;
-
-    f_lightmapWeights.x = lightstyles[index1.x][index2.x];
-    f_lightmapWeights.y = lightstyles[index1.y][index2.y];
-    f_lightmapWeights.z = lightstyles[index1.z][index2.z];
-    f_lightmapWeights.w = lightstyles[index1.w][index2.w];
+    uvec4 styles = uvec4(a_styles);
+    f_lightmapWeights.x = lightstyles[styles.x].x;
+    f_lightmapWeights.y = lightstyles[styles.y].x;
+    f_lightmapWeights.z = lightstyles[styles.z].x;
+    f_lightmapWeights.w = lightstyles[styles.w].x;
     f_lightmapWidth = a_position.w;
 #endif
 

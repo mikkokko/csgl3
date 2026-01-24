@@ -18,8 +18,8 @@ layout(std140) uniform FrameConstants
     vec4 lightPositions[MAX_SHADER_LIGHTS]; // w stores 1/radius
     vec4 lightColors[MAX_SHADER_LIGHTS];
 
-    // packed, accessed with lightstyles[i / 4][i % 4]
-    vec4 lightstyles[MAX_LIGHTSTYLES / 4];
+    // accessed with lightstyles[i].x
+    vec4 lightstyles[MAX_LIGHTSTYLES];
 };
 
 // used by brush and studio shaders
