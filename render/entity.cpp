@@ -21,6 +21,7 @@ enum BucketIndex
     BucketStudioSolid,
     BucketSpriteSolid,
     BucketTranslucent,
+    BucketBeam,
     BucketCount
 };
 
@@ -108,7 +109,7 @@ void entityDrawViewmodel(int drawFlags)
     }
 }
 
-static int ComputeRenderFx(cl_entity_t *entity, const Vector3 &origin, const Vector3 &forward)
+int entityUpdateRenderAmt(cl_entity_t *entity, const Vector3 &origin, const Vector3 &forward)
 {
     int result;
     float dist;
@@ -305,14 +306,14 @@ void entityDrawTranslucentEntities(const Vector3 &viewOrigin, const Vector3 &vie
     {
         cl_entity_t *entity = bucket.entities[i];
 
-        int renderfx = ComputeRenderFx(entity, viewOrigin, viewForward);
-        if (!renderfx)
+        int renderamt = entityUpdateRenderAmt(entity, viewOrigin, viewForward);
+        if (!renderamt)
         {
             // not visible
             continue;
         }
 
-        float blend = static_cast<float>(renderfx) * (1.0f / 255);
+        float blend = static_cast<float>(renderamt) * (1.0f / 255);
 
         const EntityHandlers *newHandler = &s_handlers[entity->model->type];
         if (handler != newHandler)
@@ -387,8 +388,8 @@ int AddEntity(int type, struct cl_entity_s *entity)
 
     if (type == ET_BEAM)
     {
-        // beams not supported yet
-        return 0;
+        AddToBucket(BucketBeam, entity);
+        return 1;
     }
 
     const model_t *model = entity->model;
@@ -475,6 +476,13 @@ void entityClearBuckets()
     {
         bucket.count = 0;
     }
+}
+
+cl_entity_t **entityGetBeams(int &count)
+{
+    Bucket &bucket = s_buckets[BucketBeam];
+    count = bucket.count;
+    return bucket.entities;
 }
 
 }

@@ -67,6 +67,7 @@ typedef struct rect_s
 #include "pm_movevars.h"
 #include "screenfade.h"
 #include "shake.h"
+#include "customentity.h"
 
 #define PRODUCT_NAME "csgl3"
 

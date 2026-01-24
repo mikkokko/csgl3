@@ -21,6 +21,7 @@
 #include "screenfadegl3.h"
 #include "particle.h"
 #include "studio_misc.h"
+#include "beam.h"
 
 extern "C" void HUD_DrawNormalTriangles();
 extern "C" void HUD_DrawTransparentTriangles();
@@ -680,6 +681,7 @@ static void SceneRenderPass(const SceneParams &params, bool onlyClientDraw)
     if (!onlyClientDraw)
     {
         particleDraw();
+        beamDraw();
 
         // draw the viewmodel last, can't draw it first
         // even though it covers a large part of the screen

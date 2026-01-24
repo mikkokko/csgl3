@@ -37,6 +37,7 @@ add_executable(shaderc shaderc/main.cpp)
 target_include_directories(shaderc PRIVATE external/stb)
 
 set(RENDER_SRC
+    render/beam.cpp
     render/brush.cpp
     render/commandbuffer.cpp
     render/decal.cpp

@@ -19,8 +19,14 @@ void entityDrawTranslucentEntities(const Vector3 &origin, const Vector3 &forward
 // draw the viewmodel, done last
 void entityDrawViewmodel(int drawFlags);
 
+// also used by beams
+int entityUpdateRenderAmt(cl_entity_t *entity, const Vector3 &origin, const Vector3 &forward);
+
 // clears all entities marked to draw this frame
 void entityClearBuckets();
+
+// get beam entities added for this frame
+cl_entity_t **entityGetBeams(int &count);
 
 }
 

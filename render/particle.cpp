@@ -376,11 +376,7 @@ static void DrawTracers()
         UpdateTracer(tracer, frametime, gravity, accel);
     }
 
-    immediateCullFace(GL_TRUE);
-
-    immediateBlendEnable(GL_FALSE);
-    immediateDepthMask(GL_TRUE);
-
+    /* currently immediateDrawEnd resets state */
     immediateDrawEnd();
 }
 
