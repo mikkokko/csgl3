@@ -518,6 +518,21 @@ static void BrushModelCenterExtents(cl_entity_t *entity, Vector3 &center, Vector
     }
 }
 
+// FIXME: dumbm, trying to match engine water surface culling
+static float BrushModelMinz(cl_entity_t *entity)
+{
+    model_t *model = entity->model;
+
+    if (!VectorIsZero(entity->angles))
+    {
+        return entity->origin.z - model->radius;
+    }
+    else
+    {
+        return entity->origin.z + model->mins.z;
+    }
+}
+
 static bool CullBrushModel(cl_entity_t *entity)
 {
     Vector3 center, extents;
@@ -536,6 +551,8 @@ static void LinkAndDrawBrushModel(cl_entity_t *entity, BrushShader &shader)
     int begin = model->firstmodelsurface;
     int end = begin + model->nummodelsurfaces;
 
+    float minz = BrushModelMinz(entity);
+
     for (int surfaceIndex = begin; surfaceIndex < end; surfaceIndex++)
     {
         gl3_surface_t *surface = &g_worldmodel->surfaces[surfaceIndex];
@@ -544,7 +561,7 @@ static void LinkAndDrawBrushModel(cl_entity_t *entity, BrushShader &shader)
         if (surface->flags & SURF_WATER)
         {
             gl3_plane_t *plane = surface->plane;
-            if (plane->normal.z < 0.9f)
+            if (plane->type != PLANE_Z || minz + 1 >= plane->dist)
             {
                 // get culled fuckass
                 continue;
