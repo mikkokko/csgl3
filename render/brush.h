@@ -109,14 +109,11 @@ struct gl3_fatsurface_t
 
 inline uint16_t STORE_U16(float flt)
 {
-    flt = Q_max(flt, 0.0f);
-    GL3_ASSERT(flt >= 0.0f && flt <= (float)UINT16_MAX);
     return (uint16_t)flt;
 }
 
 inline uint16_t PACK_U16(float flt)
 {
-    GL3_ASSERT(flt >= 0.0f && flt <= 1.0f);
     return (uint16_t)(Lerp(0, UINT16_MAX, flt));
 }
 

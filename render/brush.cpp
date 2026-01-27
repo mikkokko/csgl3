@@ -48,6 +48,7 @@ public:
         static const ShaderUniform uniforms[] = {
             SHADER_UNIFORM_CONST(u_texture, 0),
             SHADER_UNIFORM_CONST(u_lightmap, 1),
+            SHADER_UNIFORM_CONST(u_lightgammaLut, 2),
             SHADER_UNIFORM_MUT(BrushShader, u_scroll),
             SHADER_UNIFORM_TERM()
         };

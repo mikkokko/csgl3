@@ -711,6 +711,9 @@ void RenderScene(const Params &params)
     // not the ideal place for this, but ok
     textureUpdate();
 
+    // not recorded to the command buffer
+    gammaBindLUTs();
+
     SetupState();
 
     // constant state setup
