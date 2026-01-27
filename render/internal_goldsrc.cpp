@@ -872,7 +872,8 @@ gl3_brushvert_t *internalBuildVertexBuffer(model_t *model, gl3_worldmodel_t *out
 
                 for (int style = 0; style < MAXLIGHTMAPS; style++)
                 {
-                    vertex_buffer[vert_offset + k].styles[style] = surface->styles[style];
+                    // use the clamped value from gl3_fatsurface_t
+                    vertex_buffer[vert_offset + k].styles[style] = full->styles[style];
                 }
             }
 
