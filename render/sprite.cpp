@@ -211,6 +211,24 @@ static void EmitVertex(const Vector3 &position, const Vector2 &texCoord)
     immediateVertex3f(position.x, position.y, position.z);
 }
 
+static void GetAttachmentPoint(Vector3 &point, int entityIndex, int attachmentIndex)
+{
+    cl_entity_t *entity = g_engfuncs.GetEntityByIndex(entityIndex);
+    if (!entity)
+    {
+        return;
+    }
+
+    if (attachmentIndex)
+    {
+        point = entity->attachment[attachmentIndex - 1];
+    }
+    else
+    {
+        point = entity->origin;
+    }
+}
+
 void spriteDraw(cl_entity_t *entity, float blend)
 {
     SpriteInfo sprite;
@@ -223,8 +241,7 @@ void spriteDraw(cl_entity_t *entity, float blend)
 
     if (entity->curstate.body)
     {
-        // FIXME: attachment points
-        platformError("Sprite attachment points not implemented");
+        GetAttachmentPoint(origin, entity->curstate.skin, entity->curstate.body);
     }
 
     if (entity->curstate.rendermode == kRenderGlow)
