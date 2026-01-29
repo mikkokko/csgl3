@@ -6,35 +6,15 @@
 namespace Render
 {
 
-class WaterShader final : public BaseShader
-{
-public:
-    const char *Name()
-    {
-        return "water";
-    }
-
-    const VertexAttrib *VertexAttribs()
-    {
-        return g_brushVertexFormat.attribs;
-    }
-
-    const ShaderUniform *Uniforms()
-    {
-        static const ShaderUniform uniforms[] = {
-            SHADER_UNIFORM_CONST(u_texture, 0),
-            SHADER_UNIFORM_TERM()
-        };
-
-        return uniforms;
-    }
+static const ShaderUniform s_uniforms[] = {
+    { "u_texture", 0 }
 };
 
-static WaterShader s_shader;
+static BaseShader s_shader;
 
 void waterInit()
 {
-    shaderRegister(s_shader);
+    shaderRegister(s_shader, "water", g_brushVertexFormat.attribs, s_uniforms);
 }
 
 void waterDrawBegin()

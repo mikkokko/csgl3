@@ -20,67 +20,45 @@ struct BrushConstants
     Vector4 renderColor;
 };
 
-static const VertexAttrib s_vertexAttribs[] = {
-    VERTEX_ATTRIB(gl3_brushvert_t, position),
-    VERTEX_ATTRIB(gl3_brushvert_t, texCoord),
-    VERTEX_ATTRIB_NORM(gl3_brushvert_t, lightmapTexCoord),
-    VERTEX_ATTRIB(gl3_brushvert_t, styles),
-    VERTEX_ATTRIB_TERM()
-};
-
-const VertexFormat g_brushVertexFormat{ s_vertexAttribs, sizeof(gl3_brushvert_t) };
-
-class BrushShader : public BaseShader
+struct BrushShader : BaseShader
 {
-public:
-    const char *Name()
-    {
-        return "brush";
-    }
-
-    const VertexAttrib *VertexAttribs()
-    {
-        return s_vertexAttribs;
-    }
-
-    const ShaderUniform *Uniforms()
-    {
-        static const ShaderUniform uniforms[] = {
-            SHADER_UNIFORM_CONST(u_texture, 0),
-            SHADER_UNIFORM_CONST(u_lightmap, 1),
-            SHADER_UNIFORM_CONST(u_lightgammaLut, 2),
-            SHADER_UNIFORM_MUT(BrushShader, u_scroll),
-            SHADER_UNIFORM_TERM()
-        };
-
-        return uniforms;
-    }
-
     GLint u_scroll;
 };
 
-class BrushShaderAlphaTest : public BrushShader
-{
-public:
-    const char *Defines()
-    {
-        return "#define ALPHA_TEST 1\n";
-    }
+static const VertexAttrib s_vertexAttribs[] = {
+    { &gl3_brushvert_t::position, "a_position" },
+    { &gl3_brushvert_t::texCoord, "a_texCoord" },
+    { &gl3_brushvert_t::lightmapTexCoord, "a_lightmapTexCoord", true },
+    { &gl3_brushvert_t::styles, "a_styles" }
 };
 
-// no lightmaps or dlights, color modulated by BrushConstants::renderColor
-class BrushShaderNoLighting : public BrushShader
-{
-public:
-    const char *Defines()
-    {
-        return "#define NO_LIGHTING 1\n";
-    }
+const VertexFormat g_brushVertexFormat{ sizeof(gl3_brushvert_t), s_vertexAttribs };
+
+static const ShaderUniform s_uniforms[] = {
+    { "u_texture", 0 },
+    { "u_lightmap", 1 },
+    { "u_scroll", &BrushShader::u_scroll }
 };
 
-static BrushShader s_shader;
-static BrushShaderAlphaTest s_shaderAlphaTest;
-static BrushShaderNoLighting s_shaderNoLighting;
+static constexpr ShaderOption s_shaderOptions[] = {
+    { "ALPHA_TEST", 1 },
+    { "MULTI_STYLE", 1 },
+    { "HAS_DLIGHTS", 1 }
+};
+
+// must match s_shaderOptions
+struct BrushShaderOptions
+{
+    unsigned alphaTest;
+    unsigned multiStyle;
+    unsigned hasDlights;
+};
+
+// lightmapped shaders
+static BrushShader s_shaders[shaderVariantCount(s_shaderOptions)];
+
+// not lightmapped, color modulated by renderColor
+static BrushShader s_shaderUnlit;
 
 gl3_worldmodel_t g_worldmodel_static;
 
@@ -98,9 +76,8 @@ static bool s_hasSkySurfaces = false;
 
 void brushInit()
 {
-    shaderRegister(s_shader);
-    shaderRegister(s_shaderAlphaTest);
-    shaderRegister(s_shaderNoLighting);
+    shaderRegister(s_shaders, "lightmapped", s_vertexAttribs, s_uniforms, s_shaderOptions);
+    shaderRegister(s_shaderUnlit, "unlit", s_vertexAttribs, s_uniforms);
 }
 
 static void BuildLightmapAndVertexBuffer(model_t *model)
@@ -214,8 +191,14 @@ static gl3_texture_t *TextureAnimation(cl_entity_t *entity, gl3_texture_t *textu
     return texture;
 }
 
+// set when creating texture sorted draw lists (FIXME)
+static bool s_multiStyle;
+
 static void AddSurface_NoDecals(gl3_surface_t *surface)
 {
+    int flags = surface->flags;
+    s_multiStyle |= ((flags & SURF_MULTI_STYLE) != 0);
+
     gl3_texture_t *texture = surface->texture;
     texture->drawsurfaces[texture->numdrawsurfaces++] = surface;
 }
@@ -291,6 +274,7 @@ static void LinkLeaves()
     memset(s_surfaceVisBits, 0, (g_worldmodel->numsurfaces + 7) / 8);
 
     //int clipFlags = (1 << 4) - 1;
+    GL3_ASSERT(!s_multiStyle);
     TraverseTree_r(g_worldmodel->nodes);
 }
 
@@ -323,13 +307,13 @@ static float ScrollAmount(cl_entity_t *entity, gl3_texture_t *texture)
     }
 }
 
-static void DrawSurfaces(cl_entity_t *entity, const BrushShader &shader, GLuint textureOverride)
+static void DrawSurfaces(cl_entity_t *entity, GLint scrollUniformLocation, GLuint textureOverride)
 {
     // index buffer is dynamic
     commandBindVertexBuffer(g_worldmodel->vertex_buffer, g_brushVertexFormat);
 
     float prevScroll = 0;
-    commandUniform1f(shader.u_scroll, prevScroll);
+    commandUniform1f(scrollUniformLocation, prevScroll);
 
     if (textureOverride)
     {
@@ -363,7 +347,7 @@ static void DrawSurfaces(cl_entity_t *entity, const BrushShader &shader, GLuint 
         {
             DrawIndexBuffer(texture->basevertex);
             prevScroll = scroll;
-            commandUniform1f(shader.u_scroll, prevScroll);
+            commandUniform1f(scrollUniformLocation, prevScroll);
         }
 
         if (!textureOverride)
@@ -479,11 +463,31 @@ static void DrawSkySurfaces()
 }
 
 // draws all surfaces, decals, water and sky associated with this model
-static void DrawAllSurfaces(cl_entity_t *entity, BrushShader &shader, GLuint textureOverride)
+static void DrawAllSurfaces(cl_entity_t *entity, bool lightmapped, bool alphaTest, GLuint textureOverride)
 {
-    commandUseProgram(&shader);
+    BrushShader *shader;
 
-    DrawSurfaces(entity, shader, textureOverride);
+    bool multiStyle = s_multiStyle;
+    s_multiStyle = 0;
+
+    if (lightmapped)
+    {
+        //g_engfuncs.Con_Printf("multi styles? %d\n", multiStyle ? 1 : 0);
+
+        BrushShaderOptions options{};
+        options.alphaTest = alphaTest;
+        options.multiStyle = multiStyle;
+        options.hasDlights = (g_state.dlightCount > 0);
+        shader = &shaderSelect(s_shaders, s_shaderOptions, options);
+    }
+    else
+    {
+        shader = &s_shaderUnlit;
+    }
+
+    commandUseProgram(shader);
+
+    DrawSurfaces(entity, shader->u_scroll, textureOverride);
 
     // decal indices are stuffed into the same index buffer
     GL3_ASSERT(s_indexCount == s_indexLastDraw);
@@ -541,7 +545,7 @@ static bool CullBrushModel(cl_entity_t *entity)
     return g_state.viewFrustum.CullBox(center, extents);
 }
 
-static void LinkAndDrawBrushModel(cl_entity_t *entity, BrushShader &shader)
+static void LinkAndDrawBrushModel(cl_entity_t *entity, bool lightmapped, bool alphaTest)
 {
     // FIXME: this is assuming all brush models are inline models
     model_t *model = entity->model;
@@ -553,6 +557,8 @@ static void LinkAndDrawBrushModel(cl_entity_t *entity, BrushShader &shader)
     int end = begin + model->nummodelsurfaces;
 
     float minz = BrushModelMinz(entity);
+
+    GL3_ASSERT(!s_multiStyle);
 
     for (int surfaceIndex = begin; surfaceIndex < end; surfaceIndex++)
     {
@@ -585,7 +591,7 @@ static void LinkAndDrawBrushModel(cl_entity_t *entity, BrushShader &shader)
         textureOverride = g_state.whiteTexture;
     }
 
-    DrawAllSurfaces(entity, shader, textureOverride);
+    DrawAllSurfaces(entity, lightmapped, alphaTest, textureOverride);
 }
 
 static void SetupConstantBuffer(cl_entity_t *entity, const Vector4 &renderColor)
@@ -607,15 +613,15 @@ static void SetupConstantBuffer(cl_entity_t *entity, const Vector4 &renderColor)
     commandBindUniformBuffer(1, span.buffer, span.byteOffset, sizeof(constants));
 }
 
-static void LinkAndDrawWorldModel(BrushShader &shader)
+static void LinkAndDrawWorldModel()
 {
     SetupConstantBuffer(nullptr, { 1, 1, 1, 1 });
 
     // setup texturechains, water chain and decals
     LinkLeaves();
 
-    // no associated entity, no texture override
-    DrawAllSurfaces(nullptr, shader, 0);
+    // no associated entity, lightmapped, not alpha tested, no texture override
+    DrawAllSurfaces(nullptr, true, false, 0);
 }
 
 void brushDrawSolids(
@@ -624,17 +630,14 @@ void brushDrawSolids(
     cl_entity_t **alphaEntities,
     int alphaEntityCount)
 {
-    MapIndexBuffer(g_worldmodel->max_index_count);
-
     // lightmap only used for solid brush entities
     commandBindTexture(1, GL_TEXTURE_2D, g_worldmodel->lightmap_texture);
 
+    MapIndexBuffer(g_worldmodel->max_index_count);
+
     // draw fully opaque stuff
     {
-        // lightmapped, not alpha tested
-        BrushShader &shader = s_shader;
-
-        LinkAndDrawWorldModel(shader);
+        LinkAndDrawWorldModel();
 
         for (int i = 0; i < entityCount; i++)
         {
@@ -645,15 +648,12 @@ void brushDrawSolids(
             }
 
             SetupConstantBuffer(entities[i], { 1, 1, 1, 1 });
-            LinkAndDrawBrushModel(entities[i], shader);
+            LinkAndDrawBrushModel(entities[i], true, false);
         }
     }
 
     // draw alpha tested stuff
     {
-        // lightmapped, alpha tested
-        BrushShader &shader = s_shaderAlphaTest;
-
         for (int i = 0; i < alphaEntityCount; i++)
         {
             // FIXME: could cull earlier...
@@ -663,7 +663,7 @@ void brushDrawSolids(
             }
 
             SetupConstantBuffer(alphaEntities[i], { 1, 1, 1, 1 });
-            LinkAndDrawBrushModel(alphaEntities[i], shader);
+            LinkAndDrawBrushModel(alphaEntities[i], true, true);
         }
     }
 
@@ -722,16 +722,14 @@ void brushDrawTranslucent(cl_entity_t *entity, float blend)
         return;
     }
 
+    Vector4 renderColor;
+    SetBlendingAndGetColor(entity, renderColor, blend);
+    SetupConstantBuffer(entity, renderColor);
+
     MapIndexBuffer(g_worldmodel->max_submodel_index_count);
 
     // not lightmapped or alpha tested
-    BrushShader &shader = s_shaderNoLighting;
-
-    Vector4 renderColor;
-    SetBlendingAndGetColor(entity, renderColor, blend);
-
-    SetupConstantBuffer(entity, renderColor);
-    LinkAndDrawBrushModel(entity, shader);
+    LinkAndDrawBrushModel(entity, false, false);
 
     UnmapIndexBuffer();
 }

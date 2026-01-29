@@ -9,7 +9,6 @@ extern byte g_gammaLinearTable[256];
 
 void gammaInit();
 void gammaUpdate();
-void gammaBindLUTs();
 
 }
 

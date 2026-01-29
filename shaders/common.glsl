@@ -47,6 +47,3 @@ float FogFactor(float fogCoord)
     float fogFactor = exp2(fogExp2Param * fogCoord * fogCoord);    
     return clamp(fogFactor, 0.0, 1.0);
 }
-
-// software style overbright
-#define OVERBRIGHT 0

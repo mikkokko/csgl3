@@ -6,21 +6,6 @@ namespace Render
 
 constexpr int MaxVertexAttribs = 5;
 
-struct VertexAttrib
-{
-    int offset;
-    GLenum type;
-    int size;
-    bool normalized;
-    const char *name; // a_##name
-};
-
-struct VertexFormat
-{
-    const VertexAttrib *attribs;
-    int stride;
-};
-
 // try to infer the gl type
 constexpr GLenum GLType(const float *) { return GL_FLOAT; }
 constexpr GLenum GLType(const Vector2 *) { return GL_FLOAT; }
@@ -39,9 +24,33 @@ constexpr int ComponentCount(const int8_t (*)[4]) { return 4; }
 constexpr int ComponentCount(const uint8_t (*)[4]) { return 4; }
 constexpr int ComponentCount(const uint16_t (*)[2]) { return 2; }
 
-#define VERTEX_ATTRIB(vertexType, name) { (int)offsetof(vertexType, name), GLType(&((vertexType *)0)->name), ComponentCount(&((vertexType *)0)->name), false, "a_" #name }
-#define VERTEX_ATTRIB_NORM(vertexType, name) { (int)offsetof(vertexType, name), GLType(&((vertexType *)0)->name), ComponentCount(&((vertexType *)0)->name), true, "a_" #name }
-#define VERTEX_ATTRIB_TERM() { 0, 0, 0, false, nullptr }
+struct VertexAttrib
+{
+    // convenience helper
+    template<typename Field, typename Vertex>
+    VertexAttrib(const Field Vertex::*ptr, const char *_name, bool _normalized = false)
+    {
+        const Vertex *object = nullptr;
+        const Field *field = &(object->*ptr);
+        offset = static_cast<int>(reinterpret_cast<intptr_t>(field));
+        type = GLType(field);
+        size = ComponentCount(field);
+        normalized = _normalized;
+        name = _name;
+    }
+
+    int offset;
+    GLenum type;
+    int size;
+    bool normalized;
+    const char *name; // a_##name
+};
+
+struct VertexFormat
+{
+    int stride;
+    Span<const VertexAttrib> attribs;
+};
 
 }
 

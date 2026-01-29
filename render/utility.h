@@ -106,6 +106,11 @@ inline uint32_t HashString(const char *string)
 template<typename T>
 static T AlignUp(T address, int alignment)
 {
+    if (!address)
+    {
+        return {};
+    }
+
     uintptr_t temp = (uintptr_t)address;
     temp += alignment - temp % alignment;
     return (T)temp;

@@ -42,6 +42,8 @@ struct State
     Matrix4 projectionMatrix;
     Matrix4 viewProjectionMatrix;
 
+    int dlightCount;
+
     // actual fog switch, either triapi fog or water fog
     bool sceneHasFog;
 

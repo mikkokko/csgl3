@@ -11,7 +11,10 @@ enum
     SURF_BACK = (1 << 1),
     SURF_SKY = (1 << 2),
     SURF_WATER = (1 << 4),
-    SURF_SCROLL = (1 << 5)
+    SURF_SCROLL = (1 << 5),
+
+    // flags added by me
+    SURF_MULTI_STYLE = (1 << 30)
 };
 
 // must match the engine

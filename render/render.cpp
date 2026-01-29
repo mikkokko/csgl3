@@ -424,7 +424,8 @@ static Matrix4 SkyMatrix(const Vector3 &cameraPosition)
     return result;
 }
 
-static void UpdateFrameConstants(const Matrix4 &vmViewProjectionMatrix)
+// returns the dlight count for this frame
+static int UpdateFrameConstants(const Matrix4 &vmViewProjectionMatrix)
 {
     FrameConstants frameConstants;
     frameConstants.viewProjectionMatrix = g_state.viewProjectionMatrix;
@@ -480,6 +481,8 @@ static void UpdateFrameConstants(const Matrix4 &vmViewProjectionMatrix)
 
     BufferSpan span = dynamicUniformData(&frameConstants, sizeof(frameConstants));
     commandBindUniformBuffer(0, span.buffer, span.byteOffset, sizeof(frameConstants));
+
+    return numLights;
 }
 
 void renderFogEnable(bool enable, bool forceUpdate)
@@ -628,7 +631,7 @@ static void SetupView(const SceneParams &params)
     // update these mofos
     platformSetViewInfo(params.origin, params.forward, params.right, params.up);
 
-    UpdateFrameConstants(vmViewProjectionMatrix);
+    g_state.dlightCount = UpdateFrameConstants(vmViewProjectionMatrix);
 
     UpdateFogConstants();
 }
@@ -710,9 +713,6 @@ void RenderScene(const Params &params)
 
     // not the ideal place for this, but ok
     textureUpdate();
-
-    // not recorded to the command buffer
-    gammaBindLUTs();
 
     SetupState();
 

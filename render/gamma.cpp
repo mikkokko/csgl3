@@ -18,8 +18,6 @@ byte g_gammaTextureTable[256];
 byte g_gammaLinearTable[256];
 static byte s_gammaLightTable[256];
 
-static GLuint s_lightgammaLut;
-
 static void OnVariableChanged()
 {
     float brightness = v_brightness->value;
@@ -70,16 +68,6 @@ static void OnVariableChanged()
         }
     }
 
-    glBindTexture(GL_TEXTURE_1D, s_lightgammaLut);
-
-    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    glTexImage1D(GL_TEXTURE_1D, 0, GL_RED, 256, 0, GL_RED, GL_UNSIGNED_BYTE, s_gammaLightTable);
-
     shaderUpdateGamma(brightness, gamma, lightgamma);
 }
 
@@ -89,8 +77,6 @@ void gammaInit()
     v_gamma = g_engfuncs.pfnGetCvarPointer("gamma");
     v_lightgamma = g_engfuncs.pfnGetCvarPointer("lightgamma");
     v_texgamma = g_engfuncs.pfnGetCvarPointer("texgamma");
-
-    glGenTextures(1, &s_lightgammaLut);
 
     OnVariableChanged();
 }
@@ -105,13 +91,6 @@ void gammaUpdate()
     {
         OnVariableChanged();
     }
-}
-
-void gammaBindLUTs()
-{
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_1D, s_lightgammaLut);
-    glActiveTexture(GL_TEXTURE0);
 }
 
 }

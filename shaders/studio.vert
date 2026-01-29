@@ -9,9 +9,6 @@ in float a_bone;
 uniform bool u_viewmodel; // FIXME
 uniform int u_flags;
 
-// FIXME: vertex texture fetch considered harmul on shitty cards
-//uniform sampler1D u_lightgammaLut;
-
 out vec2 f_texCoord;
 out float f_fogFactor;
 out vec4 f_color;
@@ -36,6 +33,7 @@ vec2 ChromeTexCoords(mat3x4 bone, vec3 normal)
     return texCoords;
 }
 
+#if defined(HAS_ELIGHTS)
 vec3 ApplyElights(vec3 srgb, vec3 position, vec3 normal)
 {
     vec3 elights = vec3(0.0);
@@ -60,6 +58,7 @@ vec3 ApplyElights(vec3 srgb, vec3 position, vec3 normal)
     linear += elights;
     return min(pow(linear, vec3(1.0 / k_gamma)), vec3(1.0));
 }
+#endif
 
 // the reason this uses mix and step is that it used to take a vec3
 float Brighten(float f)
@@ -77,8 +76,20 @@ float ApplyBrightness(float value)
     return pow(value, float(1.0 / k_gamma));
 }
 
-vec3 StudioLighting(vec3 position, vec3 normal)
+vec4 ComputeColor(vec3 position, vec3 normal)
 {
+    if ((u_flags & STUDIO_SHADER_COLOR_ONLY) != 0)
+    {
+        // color as-is, used for additive and glowshell
+        return renderColor;
+    }
+
+    if ((u_flags & STUDIO_SHADER_FULLBRIGHT) != 0)
+    {
+        // no lighting, alpha as-is
+        return vec4(1.0, 1.0, 1.0, renderColor.a);
+    }
+
     float diffuse;
     if ((u_flags & STUDIO_SHADER_FLATSHADE) != 0)
     {
@@ -95,32 +106,13 @@ vec3 StudioLighting(vec3 position, vec3 normal)
     diffuse = ambientLight + (shadeLight * diffuse);
     diffuse = min(ApplyBrightness(diffuse), 1.0);
 
-    vec3 result = renderColor.rgb * diffuse;
+    vec3 color = renderColor.rgb * diffuse;
 
-    if ((u_flags & STUDIO_SHADER_ELIGHTS) != 0)
-    {
-        result = ApplyElights(result, position, normal);
-    }
+#if defined(HAS_ELIGHTS)
+    color = ApplyElights(color, position, normal);
+#endif
 
-    return result;
-}
-
-vec4 ComputeColor(vec3 position, vec3 normal)
-{
-    if ((u_flags & STUDIO_SHADER_COLOR_ONLY) != 0)
-    {
-        // color as-is
-        return renderColor;
-    }
-
-    vec4 result;
-
-    // compute lighting, alpha as-is
-    bool fullbright = (u_flags & STUDIO_SHADER_FULLBRIGHT) != 0;
-    result.rgb = fullbright ? vec3(1.0, 1.0, 1.0) : StudioLighting(position, normal);
-    result.a = renderColor.a;
-
-    return result;
+    return vec4(color, renderColor.a);
 }
 
 void main()

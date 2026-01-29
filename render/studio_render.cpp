@@ -27,56 +27,39 @@ struct StudioConstants
 };
 
 static const VertexAttrib s_vertexAttribs[] = {
-    VERTEX_ATTRIB(StudioVertex, position),
-    VERTEX_ATTRIB(StudioVertex, texCoord),
-    VERTEX_ATTRIB(StudioVertex, bone),
-    VERTEX_ATTRIB_NORM(StudioVertex, normal),
-    VERTEX_ATTRIB_TERM()
+    {&StudioVertex::position, "a_position" },
+    {&StudioVertex::texCoord, "a_texCoord" },
+    {&StudioVertex::bone, "a_bone" },
+    {&StudioVertex::normal, "a_normal", true }
 };
 
-const VertexFormat g_studioVertexFormat{ s_vertexAttribs, sizeof(StudioVertex) };
+const VertexFormat g_studioVertexFormat{ sizeof(StudioVertex) , s_vertexAttribs };
 
-class StudioShader : public BaseShader
+struct StudioShader : BaseShader
 {
-public:
-    const char *Name()
-    {
-        return "studio";
-    }
-
-    const VertexAttrib *VertexAttribs()
-    {
-        return s_vertexAttribs;
-    }
-
-    const ShaderUniform *Uniforms()
-    {
-        static const ShaderUniform uniforms[] = {
-            SHADER_UNIFORM_CONST(u_texture, 0),
-            SHADER_UNIFORM_MUT(StudioShader, u_viewmodel),
-            SHADER_UNIFORM_MUT(StudioShader, u_flags),
-            SHADER_UNIFORM_TERM()
-        };
-
-        return uniforms;
-    }
-
     GLint u_viewmodel;
     GLint u_flags;
 };
 
-static StudioShader s_shader;
-
-class StudioShaderAlphaTest : public StudioShader
-{
-public:
-    const char *Defines()
-    {
-        return "#define ALPHA_TEST 1\n";
-    }
+static const ShaderUniform s_uniforms[] = {
+    { "u_texture", 0 },
+    { "u_viewmodel", &StudioShader::u_viewmodel },
+    { "u_flags", &StudioShader::u_flags },
 };
 
-static StudioShaderAlphaTest s_shaderAlphaTest;
+static constexpr ShaderOption s_shaderOptions[] = {
+    { "ALPHA_TEST", 1 },
+    { "HAS_ELIGHTS", 1 }
+};
+
+// must match s_shaderOptions
+struct StudioShaderOptions
+{
+    unsigned alphaTest;
+    unsigned hasElights;
+};
+
+static StudioShader s_shaders[shaderVariantCount(s_shaderOptions)];
 
 // cringe global state for shader selection
 static bool s_viewmodel;
@@ -87,8 +70,7 @@ static cvar_t *cl_righthand;
 
 void studioRenderInit()
 {
-    shaderRegister(s_shader);
-    shaderRegister(s_shaderAlphaTest);
+    shaderRegister(s_shaders, "studio", s_vertexAttribs, s_uniforms, s_shaderOptions);
 
     r_glowshellfreq = g_engfuncs.pfnGetCvarPointer("r_glowshellfreq");
     cl_righthand = g_engfuncs.pfnGetCvarPointer("cl_righthand");
@@ -364,19 +346,17 @@ static int GetShaderFlags(StudioContext &context, int textureFlags)
         }
     }
 
-    if (context.elightCount > 0)
-    {
-        shaderFlags |= STUDIO_SHADER_ELIGHTS;
-    }
-
     return shaderFlags;
 }
 
 // selects and uses the correct shader program, sets uniforms on the default block
 static void StudioUseProgram(StudioContext &context, int textureFlags)
 {
-    bool alphaTest = (textureFlags & STUDIO_NF_MASKED);
-    StudioShader *shader = alphaTest ? &s_shaderAlphaTest : &s_shader;
+    StudioShaderOptions options{};
+    options.alphaTest = (textureFlags & STUDIO_NF_MASKED) ? 1 : 0;
+    options.hasElights = (context.elightCount > 0) ? 1 : 0;
+
+    StudioShader *shader = &shaderSelect(s_shaders, s_shaderOptions, options);
     if (shader != s_currentShader)
     {
         s_currentShader = shader;

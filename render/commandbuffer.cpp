@@ -279,12 +279,12 @@ void commandExecute()
 
             GLuint buffer = ReadWord<GLuint>();
             const VertexFormat *format = ReadWord<const VertexFormat *>();
-            const VertexAttrib *vertexAttribs = format->attribs;
+            Span<const VertexAttrib> vertexAttribs = format->attribs;
             int vertexStride = format->stride;
 
             glBindBuffer(GL_ARRAY_BUFFER, buffer);
 
-            for (i = 0; vertexAttribs[i].name; i++)
+            for (i = 0; i < vertexAttribs.size(); i++)
             {
                 const VertexAttrib &attrib = vertexAttribs[i];
 
@@ -518,7 +518,7 @@ void commandUniform1f(GLint location, GLfloat v0)
         return;
     }
 
-    UniformValue &value = g_shadowState.shader->m_uniformState[location];
+    UniformValue &value = g_shadowState.shader->uniformState[location];
     if (value.float_ != v0)
     {
         value.float_ = v0;
@@ -539,7 +539,7 @@ void commandUniform1i(GLint location, GLint v0)
         return;
     }
 
-    UniformValue &value = g_shadowState.shader->m_uniformState[location];
+    UniformValue &value = g_shadowState.shader->uniformState[location];
     if (value.int_ != v0)
     {
         value.int_ = v0;
@@ -557,7 +557,7 @@ void commandUseProgram(BaseShader *shader)
     {
         g_shadowState.shader = shader;
         WriteWord(CmdUseProgram);
-        WriteWord(shader->m_program);
+        WriteWord(shader->program);
     }
 }
 

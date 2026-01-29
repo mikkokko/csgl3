@@ -11,33 +11,14 @@
 namespace Render
 {
 
-class SkyShader final : public BaseShader
-{
-public:
-    const char *Name()
-    {
-        return "sky";
-    }
-
-    const VertexAttrib *VertexAttribs()
-    {
-        return g_brushVertexFormat.attribs;
-    }
-
-    const ShaderUniform *Uniforms()
-    {
-        static const ShaderUniform uniforms[] = {
-            SHADER_UNIFORM_CONST(u_texture, 0),
-            SHADER_UNIFORM_TERM()
-        };
-
-        return uniforms;
-    }
+static const ShaderUniform s_uniforms[] = {
+    { "u_texture", 0 }
 };
+
+static BaseShader s_shader;
 
 static char s_skyboxName[32];
 static GLuint s_texture;
-static SkyShader s_shader;
 static bool s_skyboxLoaded;
 
 static const char s_faceExtensions[][3] = {
@@ -60,7 +41,7 @@ void skyboxInit()
         glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
     }
 
-    shaderRegister(s_shader);
+    shaderRegister(s_shader, "sky", g_brushVertexFormat.attribs, s_uniforms);
 }
 
 static bool LoadFace(const char *skyboxName, int faceIndex, int &wishWidth, int &wishHeight)

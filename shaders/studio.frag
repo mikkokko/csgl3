@@ -16,7 +16,7 @@ void main()
     // discard might turn off early z, so we have it as a shader variant
     // NOTE: to match engine results, we should compute the final color first and then test, but fuck that (looks ugly)
     vec4 albedo = texture(u_texture, f_texCoord);
-#if ALPHA_TEST
+#if defined(ALPHA_TEST)
     if (albedo.a < 0.5)
     {
         discard;

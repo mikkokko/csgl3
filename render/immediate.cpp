@@ -16,49 +16,28 @@ struct ImmediateVertex
 };
 
 static const VertexAttrib s_vertexAttribs[] = {
-    VERTEX_ATTRIB(ImmediateVertex, position),
-    VERTEX_ATTRIB(ImmediateVertex, texCoord),
-    VERTEX_ATTRIB_NORM(ImmediateVertex, color),
-    VERTEX_ATTRIB_TERM()
+    { &ImmediateVertex::position, "a_position" },
+    { &ImmediateVertex::texCoord, "a_texCoord" },
+    { &ImmediateVertex::color, "a_color", true },
 };
 
-static const VertexFormat s_vertexFormat{ s_vertexAttribs, sizeof(ImmediateVertex) };
+static const VertexFormat s_vertexFormat{ sizeof(ImmediateVertex), s_vertexAttribs };
 
-class SpriteShader : public BaseShader
+static const ShaderUniform s_uniforms[] = {
+    { "u_texture", 0 }
+};
+
+static constexpr ShaderOption s_shaderOptions[] = {
+    { "ALPHA_TEST", 1 }
+};
+
+// must match s_shaderOptions
+struct SpriteShaderOptions
 {
-public:
-    const char *Name()
-    {
-        return "sprite";
-    }
-
-    const VertexAttrib *VertexAttribs()
-    {
-        return s_vertexAttribs;
-    }
-
-    const ShaderUniform *Uniforms()
-    {
-        static const ShaderUniform uniforms[] = {
-            SHADER_UNIFORM_CONST(u_texture, 0),
-            SHADER_UNIFORM_TERM()
-        };
-
-        return uniforms;
-    }
+    unsigned alphaTest;
 };
 
-class SpriteShaderAlphaTest : public SpriteShader
-{
-public:
-    const char *Defines()
-    {
-        return "#define ALPHA_TEST 1\n";
-    }
-};
-
-static SpriteShader s_shader;
-static SpriteShaderAlphaTest s_shaderAlphaTest;
+static BaseShader s_shaders[shaderVariantCount(s_shaderOptions)];
 
 static bool s_active;
 
@@ -100,8 +79,7 @@ static void Flush()
 
 void immediateInit()
 {
-    shaderRegister(s_shader);
-    shaderRegister(s_shaderAlphaTest);
+    shaderRegister(s_shaders, "sprite", s_vertexAttribs, s_uniforms, s_shaderOptions);
 }
 
 // FIXME: isn't this too small? our dynamic vertex buffers are tiny
@@ -124,7 +102,9 @@ void immediateDrawStart(bool alphaTest)
     commandBindVertexBuffer(s_vertexSpan.buffer, s_vertexFormat);
     commandBindIndexBuffer(s_indexSpan.buffer);
 
-    SpriteShader &shader = alphaTest ? s_shaderAlphaTest : s_shader;
+    SpriteShaderOptions options{};
+    options.alphaTest = alphaTest ? 1 : 0;
+    BaseShader &shader = shaderSelect(s_shaders, s_shaderOptions, options);
     commandUseProgram(&shader);
 }
 

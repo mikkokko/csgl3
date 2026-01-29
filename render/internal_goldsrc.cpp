@@ -454,7 +454,7 @@ static void LoadPlanes(const goldsrc::model_t &engineModel, gl3_worldmodel_t &mo
     }
 }
 
-bool LightmapWideTall(const goldsrc::msurface_t *surface, int &width, int &height)
+bool GetLightmapWideTall(const goldsrc::msurface_t *surface, int &width, int &height)
 {
     if (surface->flags & SURF_SKY)
     {
@@ -504,21 +504,27 @@ static void LoadFaces(const goldsrc::model_t &engineModel, gl3_worldmodel_t &mod
         full->numverts = source->numedges;
         GL3_ASSERT(full->numverts >= 3);
 
-        // keep going until we hit the terminator
+        // count styles if the surface is lightmapped
         int style_count = 0;
 
-        for (int j = 0; j < MAXLIGHTMAPS; j++)
+        if (source->samples && GetLightmapWideTall(source, full->lightmap_width, full->lightmap_height))
         {
-            if (source->styles[j] == 255)
+            for (int j = 0; j < MAXLIGHTMAPS; j++)
             {
-                break;
+                if (source->styles[j] >= NULL_LIGHTSTYLE)
+                {
+                    break;
+                }
+
+                // we use lightstyle 63 as the null lightstyle so make sure we write nothing higher than that
+                GL3_ASSERT(source->styles[j] < NULL_LIGHTSTYLE);
+
+                full->styles[j] = Q_min(source->styles[j], (byte)NULL_LIGHTSTYLE);
+                style_count++;
             }
 
-            // we use lightstyle 63 as the null lightstyle so make sure we write nothing higher than that
-            GL3_ASSERT(source->styles[j] < NULL_LIGHTSTYLE);
-
-            full->styles[j] = Q_min(source->styles[j], (byte)NULL_LIGHTSTYLE);
-            style_count++;
+            full->style_count = style_count;
+            full->lightmap_data = reinterpret_cast<Color24 *>(source->samples);
         }
 
         // set null values, they're nonzero
@@ -527,12 +533,10 @@ static void LoadFaces(const goldsrc::model_t &engineModel, gl3_worldmodel_t &mod
             full->styles[j] = NULL_LIGHTSTYLE;
         }
 
-        // lightmap stuff (FIXME: we could omit even more surfaces from lightmap building)
-        if (source->samples && style_count
-            && LightmapWideTall(source, full->lightmap_width, full->lightmap_height))
+        // store style count in the thin surface
+        if (style_count > 1)
         {
-            full->style_count = style_count;
-            full->lightmap_data = reinterpret_cast<Color24 *>(source->samples);
+            dest->flags |= SURF_MULTI_STYLE;
         }
     }
 }

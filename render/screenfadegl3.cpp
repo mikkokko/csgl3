@@ -4,38 +4,20 @@
 namespace Render
 {
 
-class ScreenFadeShader : public BaseShader
+struct ScreenFadeShader : BaseShader
 {
-public:
-    const char *Name()
-    {
-        return "screenfade";
-    }
+    GLint u_color;
+};
 
-    const VertexAttrib *VertexAttribs()
-    {
-        static const VertexAttrib empty[] = { VERTEX_ATTRIB_TERM() };
-        return empty;
-    }
-
-    const ShaderUniform *Uniforms()
-    {
-        static const ShaderUniform uniforms[] = {
-            SHADER_UNIFORM_MUT(ScreenFadeShader, u_color),
-            SHADER_UNIFORM_TERM()
-        };
-
-        return uniforms;
-    }
-
-    GLint u_color{};
+static const ShaderUniform s_uniforms[] = {
+    { "u_color", &ScreenFadeShader::u_color }
 };
 
 static ScreenFadeShader s_shader;
 
 void screenFadeInit()
 {
-    shaderRegister(s_shader);
+    shaderRegister(s_shader, "screenfade", {}, {});
 }
 
 static float ComputeAlpha(screenfade_t &screenFade)
@@ -105,7 +87,7 @@ void screenFadeDraw()
     }
 
     {
-        glUseProgram(s_shader.m_program);
+        glUseProgram(s_shader.program);
         glUniform4fv(s_shader.u_color, 1, &color.x);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }

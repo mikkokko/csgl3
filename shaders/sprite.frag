@@ -17,7 +17,7 @@ void main()
     fragColor = texture(u_texture, f_texCoord) * f_color;
 
     // discard might turn off early z, so we have it as a shader variant
-#if ALPHA_TEST
+#if defined(ALPHA_TEST)
     if (fragColor.a < k_alphaRef)
     {
         discard;

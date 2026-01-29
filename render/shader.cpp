@@ -28,262 +28,299 @@ struct ShaderData
 namespace Render
 {
 
-constexpr int MaxShaderInfo = 16;
+constexpr int MaxRegisteredShaders = 16;
 
 struct ShaderInfo
 {
     const char *name;
-    byte *shaderStruct;
-    const VertexAttrib *attributes;
-    const ShaderUniform *uniforms;
-    const char *defines;
+
+    byte *instanceData;
+    int instanceDataSize;
+    int variantCount;
+
+    Span<const VertexAttrib> attributes;
+    Span<const ShaderUniform> uniforms;
+    Span<const ShaderOption> options;
 };
 
-// FIXME: set sane defaults instead?
-static float s_brightness = -1;
-static float s_gamma = -1;
-static float s_lightgamma = -1;
+struct CachedShader
+{
+    GLuint handle{};
+    int lastUsedGeneration{};
+};
 
-static bool s_recompileQueued = true;
+struct ShaderManagerState
+{
+    // FIXME: set sane defaults instead?
+    float brightness = -1.0f;
+    float gamma = -1.0f;
+    float lightgamma = -1.0f;
 
-static int s_shaderCount;
-static ShaderInfo s_shaders[MaxShaderInfo];
+    bool recompileQueued{ true };
 
-static const char *ShaderTypeString(GLenum type)
+    int cacheGeneration{};
+    std::unordered_map<std::string, CachedShader> shaderCache;
+
+    int registeredCount{};
+    ShaderInfo registeredShaders[MaxRegisteredShaders];
+};
+
+static ShaderManagerState s_state;
+
+static const char *GetShaderTypeString(GLenum type)
 {
     switch (type)
     {
     case GL_FRAGMENT_SHADER:
         return "fragment";
-
     case GL_VERTEX_SHADER:
         return "vertex";
-
     default:
         return "unknown";
     }
 }
 
-static GLuint CompileShader(const char *shaderName, std::string &sourceString, GLenum type)
+static void LoadRawSource(const char *name, std::string &outSource)
 {
-    const char *source = sourceString.c_str();
-    int length = sourceString.size();
-
-    GLuint shader = glCreateShader(type);
-    glShaderSource(shader, 1, &source, &length);
-    glCompileShader(shader);
-
-    GLint wasCompiled = 0;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &wasCompiled);
-
-    if (!wasCompiled)
-    {
-        char message[1024];
-        glGetShaderInfoLog(shader, sizeof(message), nullptr, message);
-        platformError("Compiling %s %s shader failed:\n%s", shaderName, ShaderTypeString(type), message);
-    }
-#ifdef SCHIZO_DEBUG
-    else
-    {
-        char message[1024];
-        glGetShaderInfoLog(shader, sizeof(message), nullptr, message);
-        if (message[0])
-        {
-            platformError("%s %s shader compilation message:\n%s", shaderName, ShaderTypeString(type), message);
-        }
-    }
-#endif
-
-    return shader;
-}
-
 #ifdef SHADER_RELOAD
-static void LoadFileFromDisk(const char *name, std::string &result)
-{
     char error[256];
-    char *data = stb_include_file((char *)name, NULL, SHADER_PATH, error);
+    char *data = stb_include_file((char *)name, nullptr, SHADER_PATH, error);
     if (!data)
     {
         platformError("%s", error);
+        return;
     }
 
-    result.assign(data);
+    outSource.assign(data);
     free(data);
-}
 #else
-static void GetShaderSource(const char *name, std::string &result)
-{
-    for (const ShaderData &shader : s_shaderData)
+    for (const ShaderData &entry : s_shaderData)
     {
-        if (!strcmp(shader.name, name))
+        if (!strcmp(entry.name, name))
         {
-            result.assign(reinterpret_cast<const char *>(shader.data), shader.size);
+            outSource.assign(reinterpret_cast<const char *>(entry.data), entry.size);
             return;
         }
     }
 
-    platformError("No such shader %s", name);
+    platformError("No such shader embedded: %s", name);
+#endif
 }
-#endif
 
-static void LoadShaderSources(const char *name, std::string &vertexSource, std::string &fragmentSource)
+static void LoadShaderPairSource(const char *shaderName, std::string &outVert, std::string &outFrag)
 {
+    char vertName[256];
+    char fragName[256];
+
 #ifdef SHADER_RELOAD
-    char vertexShaderPath[256], fragmentShaderPath[256];
-    Q_sprintf(vertexShaderPath, SHADER_PATH "/%s.vert", name);
-    Q_sprintf(fragmentShaderPath, SHADER_PATH "/%s.frag", name);
-
-    LoadFileFromDisk(vertexShaderPath, vertexSource);
-    LoadFileFromDisk(fragmentShaderPath, fragmentSource);
+    snprintf(vertName, sizeof(vertName), SHADER_PATH "/%s.vert", shaderName);
+    snprintf(fragName, sizeof(fragName), SHADER_PATH "/%s.frag", shaderName);
 #else
-    char vertexShaderName[256], fragmentShaderName[256];
-    Q_sprintf(vertexShaderName, "%s.vert", name);
-    Q_sprintf(fragmentShaderName, "%s.frag", name);
-
-    GetShaderSource(vertexShaderName, vertexSource);
-    GetShaderSource(fragmentShaderName, fragmentSource);
+    snprintf(vertName, sizeof(vertName), "%s.vert", shaderName);
+    snprintf(fragName, sizeof(fragName), "%s.frag", shaderName);
 #endif
+
+    LoadRawSource(vertName, outVert);
+    LoadRawSource(fragName, outFrag);
+}
+
+static GLuint CompileShader(const char *shaderName, const std::string &sourceString, GLenum type)
+{
+    const char *sourcePtr = sourceString.c_str();
+    int length = static_cast<int>(sourceString.size());
+
+    GLuint shaderHandle = glCreateShader(type);
+    glShaderSource(shaderHandle, 1, &sourcePtr, &length);
+    glCompileShader(shaderHandle);
+
+    GLint status = 0;
+    glGetShaderiv(shaderHandle, GL_COMPILE_STATUS, &status);
+
+    if (!status)
+    {
+        char log[1024];
+        glGetShaderInfoLog(shaderHandle, sizeof(log), nullptr, log);
+        platformError("Compiling %s %s shader failed:\n%s",
+            shaderName, GetShaderTypeString(type), log);
+    }
+#ifdef SCHIZO_DEBUG
+    else
+    {
+        char log[1024];
+        glGetShaderInfoLog(shaderHandle, sizeof(log), nullptr, log);
+        if (log[0])
+        {
+            platformError("%s %s shader warning:\n%s",
+                shaderName, GetShaderTypeString(type), log);
+        }
+    }
+#endif
+
+    return shaderHandle;
+}
+
+static GLuint GetOrCompileShader(const char *name, const std::string &fullSource, GLenum type)
+{
+    CachedShader &entry = s_state.shaderCache[fullSource];
+
+    entry.lastUsedGeneration = s_state.cacheGeneration;
+
+    if (!entry.handle)
+    {
+        entry.handle = CompileShader(name, fullSource, type);
+    }
+
+    return entry.handle;
 }
 
 template<typename T>
-static void AppendDefine(std::string &buffer, const char *name, const T &value)
+static void AddMacro(std::string &buffer, const std::string &baseSource, const char *macroName, const T &value)
 {
+    if (value == 0)
+    {
+        // if the value is 0, might as well not define it
+        return;
+    }
+
+    // if you remove this, the shader cache won't work
+    if (baseSource.find(macroName) == std::string::npos)
+    {
+        // macro not used, so don't define it
+        return;
+    }
+
     buffer.append("#define ");
-    buffer.append(name);
+    buffer.append(macroName);
     buffer.append(" ");
     buffer.append(std::to_string(value));
     buffer.append("\n");
 }
 
-static GLuint LoadShaderVariant(
-    const char *shaderName,
-    std::string &vertexSourceBase,
-    std::string &fragmentSourceBase,
-    byte *shaderStruct,
-    const VertexAttrib *attributes,
-    const ShaderUniform *uniforms,
-    const char *defines,
-    float brightness,
-    float gamma,
-    float lightgamma)
+static std::string GenerateVariantSource(const std::string &baseSource, Span<const ShaderOption> options, int variantIndex)
 {
-    std::string prologue{ "#version 140\n" };
+    std::string source;
+    source.reserve(baseSource.size() + 256);
 
-    AppendDefine(prologue, "V_BRIGHTNESS", brightness);
-    AppendDefine(prologue, "V_GAMMA", gamma);
-    AppendDefine(prologue, "V_LIGHTGAMMA", lightgamma);
+    source.append("#version 140\n");
 
-    if (defines)
+    AddMacro(source, baseSource, "V_BRIGHTNESS", s_state.brightness);
+    AddMacro(source, baseSource, "V_GAMMA", s_state.gamma);
+    AddMacro(source, baseSource, "V_LIGHTGAMMA", s_state.lightgamma);
+
+    int combination = variantIndex;
+    for (const ShaderOption &opt : options)
     {
-        prologue.append(defines);
+        int range = opt.maxValue + 1;
+        int val = (combination % range);
+        combination /= range;
+
+        AddMacro(source, baseSource, opt.name, val);
     }
 
-    std::string vertexSource{ prologue };
-    vertexSource.append(vertexSourceBase);
+    source.append(baseSource);
+    return source;
+}
 
-    std::string fragmentSource{ prologue };
-    fragmentSource.append(fragmentSourceBase);
-
-    GLuint vertexShader = CompileShader(shaderName, vertexSource, GL_VERTEX_SHADER);
-    GLuint fragmentShader = CompileShader(shaderName, fragmentSource, GL_FRAGMENT_SHADER);
-
-    GLuint program = glCreateProgram();
-    glAttachShader(program, vertexShader);
-    glAttachShader(program, fragmentShader);
-
-    for (int i = 0; attributes[i].name; i++)
-    {
-        glBindAttribLocation(program, i, attributes[i].name);
-    }
-
-    glLinkProgram(program);
-
-    GLint wasLinked = 0;
-    glGetProgramiv(program, GL_LINK_STATUS, &wasLinked);
-    if (!wasLinked)
-    {
-        char message[1024];
-        glGetProgramInfoLog(program, sizeof(message), nullptr, message);
-        platformError("glLinkProgram failed for %s:\n%s", shaderName, message);
-    }
-
-    glDetachShader(program, vertexShader);
-    glDetachShader(program, fragmentShader);
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-
+static void SetupUniforms(GLuint program, byte *instancePtr, Span<const ShaderUniform> uniforms)
+{
     glUseProgram(program);
-    for (int i = 0; uniforms[i].name; i++)
+
+    for (const ShaderUniform &uniform : uniforms)
     {
-        if (uniforms[i].offset < 0)
+        if (uniform.offset < 0)
         {
-            // constant integer value
-            GLint location = glGetUniformLocation(program, uniforms[i].name);
+            GLint location = glGetUniformLocation(program, uniform.name);
             if (location != -1)
             {
-                int value = -uniforms[i].offset - 1;
+                int value = -uniform.offset - 1;
                 glUniform1i(location, value);
             }
         }
         else
         {
-            GLint &location = *reinterpret_cast<GLint *>(shaderStruct + uniforms[i].offset);
-            location = glGetUniformLocation(program, uniforms[i].name);
+            GLint *locationPtr = reinterpret_cast<GLint *>(instancePtr + uniform.offset);
+            *locationPtr = glGetUniformLocation(program, uniform.name);
         }
     }
+
     glUseProgram(0);
+}
+
+static void BindUniformBlocks(GLuint program)
+{
+    struct BlockBinding
+    {
+        const char *name;
+        int binding;
+    };
+
+    static const BlockBinding blocks[] = {
+        { "FrameConstants", 0 },
+        { "ModelConstants", 1 },
+        { "FogConstants", 2 }
+    };
+
+    for (const BlockBinding &block : blocks)
+    {
+        GLuint index = glGetUniformBlockIndex(program, block.name);
+        if (index != GL_INVALID_INDEX)
+        {
+            glUniformBlockBinding(program, index, block.binding);
+        }
+    }
+}
+
+static GLuint LinkShaderProgram(const char *name, GLuint vs, GLuint fs, Span<const VertexAttrib> attribs)
+{
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+
+    for (int i = 0; i < attribs.size(); i++)
+    {
+        glBindAttribLocation(program, i, attribs[i].name);
+    }
+
+    glLinkProgram(program);
+
+    GLint linked = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (!linked)
+    {
+        char log[1024];
+        glGetProgramInfoLog(program, sizeof(log), nullptr, log);
+        platformError("Linking failed for %s:\n%s", name, log);
+    }
+
+    glDetachShader(program, vs);
+    glDetachShader(program, fs);
 
     return program;
 }
 
-static void SetConstantBufferBindings(const char *shaderName, GLuint program)
+static void BuildShaderVariant(const ShaderInfo &info, const std::string &baseVertSrc, const std::string &baseFragSrc, int variantIndex)
 {
-    GLuint frameIndex = glGetUniformBlockIndex(program, "FrameConstants");
-    if (frameIndex != GL_INVALID_INDEX)
-    {
-        glUniformBlockBinding(program, frameIndex, 0);
-    }
-
-    GLuint modelIndex = glGetUniformBlockIndex(program, "ModelConstants");
-    if (modelIndex != GL_INVALID_INDEX)
-    {
-        glUniformBlockBinding(program, modelIndex, 1);
-    }
-
-    GLuint fogIndex = glGetUniformBlockIndex(program, "FogConstants");
-    if (fogIndex != GL_INVALID_INDEX)
-    {
-        glUniformBlockBinding(program, fogIndex, 2);
-    }
-}
-
-void LoadShaderFromInfo(const ShaderInfo &info, float brightness, float gamma, float lightgamma)
-{
-    std::string vertexSource, fragmentSource;
-    LoadShaderSources(info.name, vertexSource, fragmentSource);
+    byte *instancePtr = &info.instanceData[info.instanceDataSize * variantIndex];
 
     // m_program is guaranteed to be at offset 0
-    GLuint *pprogram = reinterpret_cast<GLuint *>(info.shaderStruct);
-    if (*pprogram)
+    GLuint *programPtr = reinterpret_cast<GLuint *>(instancePtr);
+    if (*programPtr)
     {
-        glDeleteProgram(*pprogram);
-        *pprogram = 0;
+        glDeleteProgram(*programPtr);
+        *programPtr = 0;
     }
 
-    *pprogram = LoadShaderVariant(
-        info.name,
-        vertexSource,
-        fragmentSource,
-        info.shaderStruct,
-        info.attributes,
-        info.uniforms,
-        info.defines,
-        brightness,
-        gamma,
-        lightgamma);
+    std::string fullVertSrc = GenerateVariantSource(baseVertSrc, info.options, variantIndex);
+    std::string fullFragSrc = GenerateVariantSource(baseFragSrc, info.options, variantIndex);
 
-    SetConstantBufferBindings(info.name, *pprogram);
+    GLuint vertShader = GetOrCompileShader(info.name, fullVertSrc, GL_VERTEX_SHADER);
+    GLuint fragShader = GetOrCompileShader(info.name, fullFragSrc, GL_FRAGMENT_SHADER);
+
+    GLuint program = LinkShaderProgram(info.name, vertShader, fragShader, info.attributes);
+    *programPtr = program;
+
+    BindUniformBlocks(program);
+    SetupUniforms(program, instancePtr, info.uniforms);
 }
 
 #ifdef SHADER_RELOAD
@@ -302,47 +339,80 @@ void shaderInit()
 
 void shaderUpdate(bool forceRecompile)
 {
-    if (s_recompileQueued || forceRecompile)
+    if (!s_state.recompileQueued && !forceRecompile)
     {
-        s_recompileQueued = false;
-
-        double start = g_engfuncs.GetAbsoluteTime();
-        g_engfuncs.Con_Printf("WARNING: shader recompile triggered\n");
-
-        for (int i = 0; i < s_shaderCount; i++)
-        {
-            LoadShaderFromInfo(s_shaders[i], s_brightness, s_gamma, s_lightgamma);
-        }
-
-        double end = g_engfuncs.GetAbsoluteTime();
-        g_engfuncs.Con_Printf("WARNING: shader recompile took %g ms\n", (end - start) * 1000.0);
+        return;
     }
+
+    s_state.recompileQueued = false;
+
+    double startTime = g_engfuncs.GetAbsoluteTime();
+    g_engfuncs.Con_Printf("Shader recompile triggered\n");
+
+    s_state.cacheGeneration++;
+
+    for (int i = 0; i < s_state.registeredCount; i++)
+    {
+        const ShaderInfo &info = s_state.registeredShaders[i];
+
+        std::string baseVert, baseFrag;
+        LoadShaderPairSource(info.name, baseVert, baseFrag);
+
+        for (int v = 0; v < info.variantCount; v++)
+        {
+            BuildShaderVariant(info, baseVert, baseFrag, v);
+        }
+    }
+
+    // delete shaders that are not used by the current programs (probably won't be used by future programs either)
+    for (auto it = s_state.shaderCache.begin(); it != s_state.shaderCache.end();)
+    {
+        const CachedShader &entry = it->second;
+        if (entry.lastUsedGeneration != s_state.cacheGeneration)
+        {
+            glDeleteShader(entry.handle);
+            it = s_state.shaderCache.erase(it);
+        }
+        else
+        {
+            it++;
+        }
+    }
+
+    double endTime = g_engfuncs.GetAbsoluteTime();
+    g_engfuncs.Con_Printf("Shader recompile took %g ms\n", (endTime - startTime) * 1000.0);
 }
 
 void shaderUpdateGamma(float brightness, float gamma, float lightgamma)
 {
-    if (s_brightness != brightness || s_gamma != gamma || s_lightgamma != lightgamma)
+    if (s_state.brightness != brightness || s_state.gamma != gamma || s_state.lightgamma != lightgamma)
     {
-        s_brightness = brightness;
-        s_gamma = gamma;
-        s_lightgamma = lightgamma;
-        s_recompileQueued = true;
+        s_state.brightness = brightness;
+        s_state.gamma = gamma;
+        s_state.lightgamma = lightgamma;
+        s_state.recompileQueued = true;
     }
 }
 
-void shaderRegister(const char *name,
-    byte *shaderStruct,
-    const VertexAttrib *attributes,
-    const ShaderUniform *uniforms,
-    const char *defines)
+void shaderRegister(
+    byte *shaderStructs,
+    int shaderStructSize,
+    int shaderCount,
+    const char *name,
+    Span<const VertexAttrib> attributes,
+    Span<const ShaderUniform> uniforms,
+    Span<const ShaderOption> options)
 {
-    GL3_ASSERT(s_shaderCount < MaxShaderInfo);
-    ShaderInfo &shaderInfo = s_shaders[s_shaderCount++];
-    shaderInfo.name = name;
-    shaderInfo.shaderStruct = shaderStruct;
-    shaderInfo.attributes = attributes;
-    shaderInfo.uniforms = uniforms;
-    shaderInfo.defines = defines;
+    GL3_ASSERT(s_state.registeredCount < MaxRegisteredShaders);
+
+    ShaderInfo &info = s_state.registeredShaders[s_state.registeredCount++];
+    info.name = name;
+    info.instanceData = shaderStructs;
+    info.instanceDataSize = shaderStructSize;
+    info.variantCount = shaderCount;
+    info.attributes = attributes;
+    info.uniforms = uniforms;
+    info.options = options;
 }
 
 }

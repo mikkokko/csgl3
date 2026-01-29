@@ -15,6 +15,33 @@
 
 #include <xmmintrin.h>
 
+// FIXME: bruh
+template<typename T>
+class Span
+{
+public:
+    Span() = default;
+
+    template<int N>
+    Span(T (&data)[N])
+        : m_data{ data }
+        , m_size{ N }
+    {
+    }
+
+    T *data() const { return m_data; }
+    int size() const { return m_size; }
+
+    T &operator[](int i) { return m_data[i]; };
+
+    T *begin() const { return m_data; }
+    T *end() const { return m_data + m_size; }
+
+private:
+    T *m_data;
+    int m_size;
+};
+
 #ifndef NDEBUG
 #define SCHIZO_DEBUG
 #endif
