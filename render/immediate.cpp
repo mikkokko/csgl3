@@ -38,61 +38,182 @@ struct SpriteShaderOptions
 
 static BaseShader s_shaders[shaderVariantCount(s_shaderOptions)];
 
+struct Primitive
+{
+    uint16_t mode; // GLenum
+    uint16_t vertexCount;
+};
+
+// 16 bit indices, so this should be 65536, but have it at 65535
+// so we can have Primitive::vertexCount as an uint16 without overflow woes
+constexpr int MaxStageVertices = UINT16_MAX;
+
+// worst case is all triangles
+constexpr int MaxStagePrimitives = MaxStageVertices / 3;
+
 static bool s_active;
 
-static std::vector<ImmediateVertex> s_stageVertices;
-static std::vector<uint16_t> s_stageIndices;
+static ImmediateVertex *s_stageVertices;
+static int s_stageVertexCount;
+
+static Primitive *s_stagePrimitives;
+static int s_stagePrimitiveCount;
+
+// number of indices the staged primitives are going to generate
+static int s_stageIndexCount;
 
 static GLenum s_currentMode;
-static size_t s_primitiveStartVertex;
+static int s_primitiveStartVertex;
 
 // current vertex attributes
 static ImmediateVertex s_currentVertex;
 
+static uint16_t *EmitTRIANGLES(uint16_t *dst, int first, int vertexCount)
+{
+    for (int i = 0; i + 3 <= vertexCount; i += 3)
+    {
+        *dst++ = static_cast<uint16_t>(first + i + 0);
+        *dst++ = static_cast<uint16_t>(first + i + 1);
+        *dst++ = static_cast<uint16_t>(first + i + 2);
+    }
+
+    return dst;
+}
+
+static uint16_t *EmitQUADS(uint16_t *dst, int first, int vertexCount)
+{
+    for (int i = 0; i + 4 <= vertexCount; i += 4)
+    {
+        *dst++ = static_cast<uint16_t>(first + i + 0);
+        *dst++ = static_cast<uint16_t>(first + i + 1);
+        *dst++ = static_cast<uint16_t>(first + i + 2);
+        *dst++ = static_cast<uint16_t>(first + i + 0);
+        *dst++ = static_cast<uint16_t>(first + i + 2);
+        *dst++ = static_cast<uint16_t>(first + i + 3);
+    }
+
+    return dst;
+}
+
+static uint16_t *EmitQUAD_STRIP(uint16_t *dst, int first, int vertexCount)
+{
+    for (int i = 2; i + 1 < vertexCount; i += 2)
+    {
+        *dst++ = static_cast<uint16_t>(first + i - 2);
+        *dst++ = static_cast<uint16_t>(first + i - 1);
+        *dst++ = static_cast<uint16_t>(first + i + 1);
+        *dst++ = static_cast<uint16_t>(first + i - 2);
+        *dst++ = static_cast<uint16_t>(first + i + 1);
+        *dst++ = static_cast<uint16_t>(first + i + 0);
+    }
+
+    return dst;
+}
+
+static void EmitIndices(uint16_t *spanData, int indexBias)
+{
+    uint16_t *dst = spanData;
+    int first = indexBias;
+
+    for (int i = 0; i < s_stagePrimitiveCount; i++)
+    {
+        const Primitive &primitive = s_stagePrimitives[i];
+        int primitiveVertexCount = primitive.vertexCount;
+
+        switch (primitive.mode)
+        {
+        case GL_TRIANGLES:
+            dst = EmitTRIANGLES(dst, first, primitiveVertexCount);
+            break;
+
+        case GL_QUADS:
+            dst = EmitQUADS(dst, first, primitiveVertexCount);
+            break;
+
+        case GL_QUAD_STRIP:
+            dst = EmitQUAD_STRIP(dst, first, primitiveVertexCount);
+            break;
+
+        default:
+            // already encountered by PrimitiveIndexCount
+            GL3_ASSERT(false);
+            break;
+        }
+
+        first += primitiveVertexCount;
+    }
+
+    GL3_ASSERT(dst - spanData == s_stageIndexCount);
+}
+
+static int PrimitiveIndexCount(GLenum mode, int vertexCount)
+{
+    switch (mode)
+    {
+    case GL_TRIANGLES:
+        return (vertexCount / 3) * 3;
+
+    case GL_QUADS:
+        return (vertexCount / 4) * 6;
+
+    case GL_QUAD_STRIP:
+        return (vertexCount >= 4) ? ((vertexCount - 2) / 2) * 6 : 0;
+    }
+
+    // don't sweep these under the rug
+    platformError("Unsupported primitive type 0x%04x", mode);
+}
+
 static void Flush()
 {
-    if (s_stageIndices.empty())
+    if (!s_stageIndexCount)
     {
+        // shouldn't have to wipe these but just in case
+        s_stageVertexCount = 0;
+        s_stagePrimitiveCount = 0;
         return;
     }
 
-    // FIXME: vertex count can technically overflow index max
-    int vertexCount = (static_cast<int>(s_stageVertices.size()));
+    int vertexCount = s_stageVertexCount;
+
     auto vertexSpan = dynamicVertexDataBegin<ImmediateVertex>(vertexCount);
-    std::copy(s_stageVertices.begin(), s_stageVertices.end(), vertexSpan.data);
+    memcpy(vertexSpan.data, s_stageVertices, vertexCount * sizeof(ImmediateVertex));
     dynamicVertexDataEnd<ImmediateVertex>(vertexCount);
 
-    int indexCount = static_cast<int>(s_stageIndices.size());
-    auto indexSpan = dynamicIndexDataBegin<uint16_t>(static_cast<int>(s_stageIndices.size()));
-    std::copy(s_stageIndices.begin(), s_stageIndices.end(), indexSpan.data);
-    dynamicIndexDataEnd<uint16_t>(indexCount);
-
-    // FIXME: it would be nice if the base vertex didn't change as often...
+    GL3_ASSERT((vertexSpan.byteOffset % sizeof(ImmediateVertex)) == 0);
     int baseVertex = vertexSpan.byteOffset / sizeof(ImmediateVertex);
+
+    // avoid using a non zero base vertex by any means necessary
+    int indexBias = 0;
+    if (baseVertex + vertexCount <= MaxStageVertices)
+    {
+        indexBias = baseVertex;
+        baseVertex = 0;
+    }
+
+    auto indexSpan = dynamicIndexDataBegin<uint16_t>(s_stageIndexCount);
+    EmitIndices(indexSpan.data, indexBias);
+    dynamicIndexDataEnd<uint16_t>(s_stageIndexCount);
+
     commandBindVertexBuffer(vertexSpan.buffer, s_vertexFormat, baseVertex);
 
     commandBindIndexBuffer(indexSpan.buffer);
 
     commandDrawElements(
         GL_TRIANGLES,
-        indexCount,
+        s_stageIndexCount,
         GL_UNSIGNED_SHORT,
         indexSpan.byteOffset);
 
-    s_stageVertices.clear();
-    s_stageIndices.clear();
+    s_stageVertexCount = 0;
+    s_stagePrimitiveCount = 0;
+    s_stageIndexCount = 0;
 }
-
-// FIXME: isn't this too small? our dynamic vertex buffers are tiny
-constexpr int ReserveVertexCount = 16384;
-
-// all quad strips is the worst case for now
-constexpr int ReserveIndexCount = (ReserveVertexCount * 6) / 2;
 
 void immediateInit()
 {
-    s_stageVertices.reserve(ReserveVertexCount);
-    s_stageIndices.reserve(ReserveIndexCount);
+    s_stageVertices = memoryStaticAlloc<ImmediateVertex>(MaxStageVertices);
+    s_stagePrimitives = memoryStaticAlloc<Primitive>(MaxStagePrimitives);
     shaderRegister(s_shaders, "sprite", s_vertexAttribs, s_uniforms, s_shaderOptions);
 }
 
@@ -198,7 +319,7 @@ void immediateBegin(GLenum mode)
     GL3_ASSERT(s_active);
 
     s_currentMode = mode;
-    s_primitiveStartVertex = s_stageVertices.size();
+    s_primitiveStartVertex = s_stageVertexCount;
 }
 
 void immediateColor4f(float r, float g, float b, float a)
@@ -222,87 +343,39 @@ void immediateVertex3f(float x, float y, float z)
 {
     GL3_ASSERT(s_active);
 
+    if (s_stageVertexCount >= MaxStageVertices)
+    {
+        platformError("Immediate mode vertex overflow");
+    }
+
     s_currentVertex.position = { x, y, z };
-    s_stageVertices.push_back(s_currentVertex);
-}
-
-static void EmitTRIANGLES(size_t vertexStart, size_t vertexEnd)
-{
-    for (size_t i = vertexStart; i < vertexEnd; i += 3)
-    {
-        uint16_t indices[] = {
-            static_cast<uint16_t>(i + 0),
-            static_cast<uint16_t>(i + 1),
-            static_cast<uint16_t>(i + 2)
-        };
-
-        s_stageIndices.insert(s_stageIndices.end(), std::begin(indices), std::end(indices));
-    }
-}
-
-static void EmitQUADS(size_t vertexStart, size_t vertexEnd)
-{
-    for (size_t i = vertexStart; i < vertexEnd; i += 4)
-    {
-        uint16_t indices[] = {
-            static_cast<uint16_t>(i + 0),
-            static_cast<uint16_t>(i + 1),
-            static_cast<uint16_t>(i + 2),
-            static_cast<uint16_t>(i + 0),
-            static_cast<uint16_t>(i + 2),
-            static_cast<uint16_t>(i + 3)
-        };
-
-        s_stageIndices.insert(s_stageIndices.end(), std::begin(indices), std::end(indices));
-    }
-}
-
-static void EmitQUAD_STRIP(size_t vertexStart, size_t vertexEnd)
-{
-    for (size_t i = vertexStart + 2; i < vertexEnd; i += 2)
-    {
-        uint16_t indices[] = {
-            static_cast<uint16_t>(i - 2),
-            static_cast<uint16_t>(i - 1),
-            static_cast<uint16_t>(i + 1),
-            static_cast<uint16_t>(i - 2),
-            static_cast<uint16_t>(i + 1),
-            static_cast<uint16_t>(i + 0)
-        };
-
-        s_stageIndices.insert(s_stageIndices.end(), std::begin(indices), std::end(indices));
-    }
+    s_stageVertices[s_stageVertexCount++] = s_currentVertex;
 }
 
 void immediateEnd()
 {
     GL3_ASSERT(s_active);
 
-    GL3_ASSERT(s_stageVertices.size() >= s_primitiveStartVertex);
+    GL3_ASSERT(s_stageVertexCount >= s_primitiveStartVertex);
+    int vertexCount = s_stageVertexCount - s_primitiveStartVertex;
 
-    size_t vertexStart = s_primitiveStartVertex;
-    size_t vertexEnd = s_stageVertices.size();
-
-    // FIXME: incomplete primitives are not handled
-    switch (s_currentMode)
+    int indexCount = PrimitiveIndexCount(s_currentMode, vertexCount);
+    if (!indexCount)
     {
-    case GL_TRIANGLES:
-        EmitTRIANGLES(vertexStart, vertexEnd);
-        break;
-
-    case GL_QUADS:
-        EmitQUADS(vertexStart, vertexEnd);
-        break;
-
-    case GL_QUAD_STRIP:
-        EmitQUAD_STRIP(vertexStart, vertexEnd);
-        break;
-
-    default:
-        // don't sweep these under the rug
-        platformError("Unsupported primitive type 0x%04x", s_currentMode);
-        break;
+        // shouldn't happen
+        s_stageVertexCount = s_primitiveStartVertex;
+        return;
     }
+
+    GL3_ASSERT(vertexCount <= UINT16_MAX);
+    GL3_ASSERT(s_stagePrimitiveCount < MaxStagePrimitives);
+
+    s_stagePrimitives[s_stagePrimitiveCount++] = {
+        static_cast<uint16_t>(s_currentMode),
+        static_cast<uint16_t>(vertexCount)
+    };
+
+    s_stageIndexCount += indexCount;
 }
 
 }
