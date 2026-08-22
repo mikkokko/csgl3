@@ -256,11 +256,11 @@ bool detailIsActive()
     return (s_status == DetailLoaded);
 }
 
-void detailSetTextureAndScale(int textureIndex, GLint scaleLocation)
+Vector2 detailSetTextureAndGetScale(int textureIndex)
 {
     if (!r_detailtextures || !r_detailtextures->value)
     {
-        return;
+        return {};
     }
 
     if (s_status == DetailLoaded)
@@ -269,12 +269,14 @@ void detailSetTextureAndScale(int textureIndex, GLint scaleLocation)
         if (!texture.name)
         {
             commandBindTexture(2, GL_TEXTURE_2D, g_state.grayTexture);
-            return;
+            return {};
         }
 
         commandBindTexture(2, GL_TEXTURE_2D, texture.name);
-        commandUniform2f(scaleLocation, texture.scale.x, texture.scale.y);
+        return texture.scale;
     }
+
+    return {};
 }
 
 void detailClearTexture()

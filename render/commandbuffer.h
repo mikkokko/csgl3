@@ -14,6 +14,16 @@ namespace Render
 
 constexpr unsigned MaxTextureUnits = 4;
 
+// shadow slot uniform data so that subsequent
+// commandSetUniformData calls with the same data can be skipped
+constexpr int MaxShadowedUniformSize = 64;
+
+struct UniformSlot
+{
+    int shadowSize; // 0 if not shadowed
+    uint8_t shadow[MaxShadowedUniformSize];
+};
+
 // shadowing state to reduce command buffer sizes, overhead is negligible
 // exposed in header for immediate.cpp (FIXME: does it really need this?)
 struct ShadowState
@@ -38,6 +48,8 @@ struct ShadowState
     GLuint textureCubeMaps[MaxTextureUnits]{};
 
     BaseShader *shader{};
+
+    UniformSlot uniformSlots[MaxUniformBlocks]{};
 };
 
 extern ShadowState g_shadowState;
@@ -60,16 +72,15 @@ void commandDepthMask(GLboolean flag);
 void commandCullFace(GLboolean enable);
 void commandPolygonOffset(GLfloat factor, GLfloat units);
 
-// programs and default uniform block (FIXME: revise this, ugly interface)
+// shader programs
 void commandUseProgram(BaseShader *shader);
-void commandUniform1f(GLint location, GLfloat v0);
-void commandUniform1i(GLint location, GLint v0);
-void commandUniform2f(GLint location, GLfloat v0, GLfloat v1);
 
 // buffer bindings, vertex attributes and vertex buffer set together for convenience (latched state)
 void commandBindVertexBuffer(GLuint buffer, const VertexFormat &format, int baseVertex);
 void commandBindIndexBuffer(GLuint buffer);
-void commandBindUniformBuffer(GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size);
+
+// does the data upload too for shadowing
+void commandSetUniformData(UniformBlock index, const void *data, int size);
 
 // ActiveTexture and BindTexture combined for your convenience
 void commandBindTexture(GLuint unit, GLenum target, GLuint texture);

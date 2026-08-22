@@ -5,7 +5,6 @@ uniform sampler2D u_texture;
 
 #if defined(DETAIL)
 uniform sampler2D u_detail;
-uniform vec2 u_detailScale;
 #endif
 
 in vec2 texCoord;
@@ -18,7 +17,7 @@ void main()
     fragColor = texture(u_texture, texCoord) * renderColor;
 
 #if defined(DETAIL)
-    vec3 detail = texture(u_detail, texCoord.xy * u_detailScale).rgb;
+    vec3 detail = texture(u_detail, texCoord.xy * detailScale).rgb;
     fragColor.rgb *= detail * 2.0;
 #endif
 

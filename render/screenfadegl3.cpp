@@ -4,26 +4,17 @@
 namespace Render
 {
 
-struct ScreenFadeShader : BaseShader
-{
-    GLint u_color;
-};
-
 static const VertexAttrib s_vertexAttribs[] = {
     { &Vector2::x, "a_position" },
 };
 
-static const ShaderUniform s_uniforms[] = {
-    { "u_color", &ScreenFadeShader::u_color }
-};
-
-static ScreenFadeShader s_shader;
+static BaseShader s_shader;
 
 static GLuint s_vertexBuffer;
 
 void screenFadeInit()
 {
-    shaderRegister(s_shader, "screenfade", s_vertexAttribs, s_uniforms);
+    shaderRegister(s_shader, "screenfade", s_vertexAttribs, {});
 
     // fullscreen triangle
     const Vector2 vertices[] = {
@@ -105,7 +96,11 @@ void screenFadeDraw()
 
     {
         glUseProgram(s_shader.program);
-        glUniform4fv(s_shader.u_color, 1, &color.x);
+
+        // FIXME: clunky... maybe this should be in an existing constant buffer
+        // i wiped away the plain uniform infra, and shader compilation is deferred,
+        // so we can't fetch this in screenFadeInit
+        glUniform4fv(glGetUniformLocation(s_shader.program, "u_color"), 1, &color.x);
 
         glBindBuffer(GL_ARRAY_BUFFER, s_vertexBuffer);
         glEnableVertexAttribArray(0);

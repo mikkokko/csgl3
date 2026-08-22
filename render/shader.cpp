@@ -278,37 +278,31 @@ static std::string GenerateVariantSource(const std::string &baseSource, Span<con
     return source;
 }
 
-static void SetupUniforms(GLuint program, byte *instancePtr, Span<const ShaderUniform> uniforms)
+static void SetupUniforms(const char *shaderName, GLuint program, byte *instancePtr, Span<const ShaderUniform> uniforms)
 {
     glUseProgram(program);
 
     for (const ShaderUniform &uniform : uniforms)
     {
-        if (uniform.offset < 0)
+        GLint location = glGetUniformLocation(program, uniform.name);
+        if (location != -1)
         {
-            GLint location = glGetUniformLocation(program, uniform.name);
-            if (location != -1)
-            {
-                int value = -uniform.offset - 1;
-                glUniform1i(location, value);
-            }
-        }
-        else
-        {
-            GLint *locationPtr = reinterpret_cast<GLint *>(instancePtr + uniform.offset);
-            *locationPtr = glGetUniformLocation(program, uniform.name);
+            glUniform1i(location, uniform.samplerSlot);
         }
     }
 
     glUseProgram(0);
 }
 
-static const char *const s_blockNames[MaxUniformBlocks] = {
+static const char *const s_blockNames[] = {
     "FrameConstants",
-    "ModelConstants",
     "FogConstants",
-    "BoneConstants"
+    "BoneConstants",
+    "ModelConstants",
+    "TextureConstants"
 };
+
+static_assert(std::size(s_blockNames) == MaxUniformBlocks, "bruh");
 
 static void BindUniformBlocks(GLuint program)
 {
@@ -461,8 +455,6 @@ static void BuildShaderVariant(const ShaderInfo &info, const std::string &baseVe
         instance->program = 0;
     }
 
-    instance->uniformState.clear();
-
     free(instance->flatBlocks);
     instance->flatBlocks = nullptr;
 
@@ -480,7 +472,7 @@ static void BuildShaderVariant(const ShaderInfo &info, const std::string &baseVe
         BindUniformBlocks(program);
     }
 
-    SetupUniforms(program, instancePtr, info.uniforms);
+    SetupUniforms(info.name, program, instancePtr, info.uniforms);
 
 #ifndef SHADER_RELOAD
     if (!GLAD_GL_ARB_uniform_buffer_object)
@@ -571,21 +563,6 @@ void shaderRegister(
     Span<const ShaderOption> options)
 {
     GL3_ASSERT(s_state.registeredCount < MaxRegisteredShaders);
-
-    int mutableCount = 0;
-
-    for (const ShaderUniform &uniform : uniforms)
-    {
-        if (uniform.offset >= 0)
-        {
-            mutableCount++;
-        }
-    }
-
-    if (mutableCount > MaxShaderUniforms)
-    {
-        platformError("Shader %s has %d mutable uniforms, max is %d", name, mutableCount, MaxShaderUniforms);
-    }
 
     ShaderInfo &info = s_state.registeredShaders[s_state.registeredCount++];
     info.name = name;

@@ -8,6 +8,9 @@ namespace Render
 // should be enough for anything except the torture maps
 constexpr int InitialBufferCapacity = 16834;
 
+// FIXME: this fucking sucks
+static_assert(MaxUniformBlocks == 5, "CmdBindUniformBuffer<n> out of date");
+
 enum Command
 {
     CmdActiveTexture,
@@ -16,6 +19,7 @@ enum Command
     CmdBindUniformBuffer1,
     CmdBindUniformBuffer2,
     CmdBindUniformBuffer3,
+    CmdBindUniformBuffer4,
 
     CmdBindTexture2D,
     CmdBindTextureCubeMap,
@@ -26,9 +30,6 @@ enum Command
     CmdDrawElementsBaseVertex,
 
     CmdPolygonOffset,
-    CmdUniform1f,
-    CmdUniform1i,
-    CmdUniform2f,
     CmdUseProgram,
     CmdBindVertexBuffer,
     CmdBindIndexBuffer,
@@ -91,6 +92,8 @@ void commandRecord()
 
 #ifdef SCHIZO_DEBUG
     g_state.drawcallCount = 0;
+    g_state.uniformBindCount = 0;
+    g_state.uniformBindSkipCount = 0;
 #endif
 
     // state reset
@@ -277,6 +280,7 @@ void commandExecute()
         case CmdBindUniformBuffer1:
         case CmdBindUniformBuffer2:
         case CmdBindUniformBuffer3:
+        case CmdBindUniformBuffer4:
         {
             int binding = cmd - CmdBindUniformBuffer0;
             //GLenum target = ReadWord<GLenum>();
@@ -284,6 +288,11 @@ void commandExecute()
             GLuint buffer = ReadWord<GLuint>();
             GLintptr offset = ReadWord<GLintptr>();
             GLsizeiptr size = ReadWord<GLsizeiptr>();
+
+#ifdef SCHIZO_DEBUG
+            g_state.uniformBindCount++;
+#endif
+
             if (GLAD_GL_ARB_uniform_buffer_object)
             {
                 glBindBufferRange(GL_UNIFORM_BUFFER, binding, buffer, offset, size);
@@ -377,31 +386,6 @@ void commandExecute()
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(factor, units);
             }
-        }
-        break;
-
-        case CmdUniform1f:
-        {
-            GLint location = ReadWord<GLint>();
-            GLfloat v0 = ReadWord<GLfloat>();
-            glUniform1f(location, v0);
-        }
-        break;
-
-        case CmdUniform1i:
-        {
-            GLint location = ReadWord<GLint>();
-            GLint v0 = ReadWord<GLint>();
-            glUniform1i(location, v0);
-        }
-        break;
-
-        case CmdUniform2f:
-        {
-            GLint location = ReadWord<GLint>();
-            GLfloat v0 = ReadWord<GLfloat>();
-            GLfloat v1 = ReadWord<GLfloat>();
-            glUniform2f(location, v0, v1);
         }
         break;
 
@@ -504,15 +488,41 @@ void commandExecute()
     s_readOffset = 0;
 }
 
-void commandBindUniformBuffer(GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size)
+void commandSetUniformData(UniformBlock index, const void *data, int size)
 {
     GL3_ASSERT(s_recording);
-    GL3_ASSERT(index < MaxUniformBlocks);
+    GL3_ASSERT(index < UniformBlock::Count);
+    GL3_ASSERT(size > 0);
 
-    WriteWord(CmdBindUniformBuffer0 + index);
+    int slotIndex = static_cast<int>(index);
+    UniformSlot &slot = g_shadowState.uniformSlots[slotIndex];
+
+    bool shadowed = (size <= MaxShadowedUniformSize);
+    if (shadowed && slot.shadowSize >= size && !memcmp(slot.shadow, data, size))
+    {
+        // same data is already bound
+#ifdef SCHIZO_DEBUG
+        g_state.uniformBindSkipCount++;
+#endif
+        return;
+    }
+
+    BufferSpan span = dynamicUniformData(data, size);
+
+    if (shadowed)
+    {
+        slot.shadowSize = size;
+        memcpy(slot.shadow, data, size);
+    }
+    else
+    {
+        slot.shadowSize = 0;
+    }
+
+    WriteWord(CmdBindUniformBuffer0 + slotIndex);
     //WriteWord(index);
-    WriteWord(buffer);
-    WriteWord(offset);
+    WriteWord(span.buffer);
+    WriteWord(span.byteOffset);
     WriteWord(size);
 }
 
@@ -652,68 +662,6 @@ void commandPolygonOffset(GLfloat factor, GLfloat units)
     WriteWord(CmdPolygonOffset);
     WriteWord(factor);
     WriteWord(units);
-}
-
-void commandUniform1f(GLint location, GLfloat v0)
-{
-    GL3_ASSERT(s_recording);
-    GL3_ASSERT(g_shadowState.shader);
-
-    if (location == -1)
-    {
-        return;
-    }
-
-    UniformValue &value = g_shadowState.shader->uniformState[location];
-    if (value.float_[0] != v0)
-    {
-        value.float_[0] = v0;
-        WriteWord(CmdUniform1f);
-        WriteWord(location);
-        WriteWord(v0);
-    }
-}
-
-void commandUniform1i(GLint location, GLint v0)
-{
-    GL3_ASSERT(s_recording);
-    GL3_ASSERT(g_shadowState.shader);
-
-    if (location == -1)
-    {
-        return;
-    }
-
-    UniformValue &value = g_shadowState.shader->uniformState[location];
-    if (value.int_[0] != v0)
-    {
-        value.int_[0] = v0;
-        WriteWord(CmdUniform1i);
-        WriteWord(location);
-        WriteWord(v0);
-    }
-}
-
-void commandUniform2f(GLint location, GLfloat v0, GLfloat v1)
-{
-    GL3_ASSERT(s_recording);
-    GL3_ASSERT(g_shadowState.shader);
-
-    if (location == -1)
-    {
-        return;
-    }
-
-    UniformValue &value = g_shadowState.shader->uniformState[location];
-    if (value.float_[0] != v0 || value.float_[1] != v1)
-    {
-        value.float_[0] = v0;
-        value.float_[1] = v1;
-        WriteWord(CmdUniform2f);
-        WriteWord(location);
-        WriteWord(v0);
-        WriteWord(v1);
-    }
 }
 
 void commandUseProgram(BaseShader *shader)

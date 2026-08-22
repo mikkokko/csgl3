@@ -9,8 +9,13 @@ static uint32_t s_state = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&s_s
 
 static uint32_t Next()
 {
-    s_state = s_state * 0x915f77f5 + 1;
-    return s_state;
+    uint32_t x = s_state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    s_state = x;
+
+    return x;
 }
 
 int randomInt(int min, int max)

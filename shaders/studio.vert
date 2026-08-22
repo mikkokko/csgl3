@@ -21,6 +21,10 @@ layout(std140) uniform ModelConstants
     // room for 4 lights, but only 3 used
     vec4 elights[3]; // x,y,z
     vec4 elightColors[3]; // r,g,b
+
+    // boolean constants...
+    bool viewmodel;
+    bool additive;
 };
 
 layout(std140) uniform BoneConstants
@@ -28,30 +32,31 @@ layout(std140) uniform BoneConstants
     mat3x4 bones[MAX_SHADER_BONES];
 };
 
+layout(std140) uniform TextureConstants
+{
+    // only used for glowshell
+    vec2 uvScale;
+
+    // not used for glowshell
+    // separate bools for GLSL 1.20
+    bool fullbright;
+    bool flatshade;
+    bool chrome;
+};
+
+#if defined(GLOWSHELL)
+// make these constants for glowshell so we don't
+// completely clutter the code with ifdefs
+#define fullbright false
+#define flatshade false
+#define chrome true
+#endif
+
 // awful packing
 #define ambientLight ambientAndShadeLight.x
 #define shadeLight ambientAndShadeLight.y
 #define chromeOrigin chromeOriginAndShellScale.xyz
 #define shellScale chromeOriginAndShellScale.w
-
-uniform bool u_viewmodel; // FIXME
-
-#if !defined(GLOWSHELL)
-// used to be u_flags, split into bools for GLSL 1.20
-uniform bool u_colorOnly;
-uniform bool u_fullbright;
-uniform bool u_flatshade;
-uniform bool u_chrome;
-#else
-// make these constants for glowshell,
-// the compiler will optimize them out (not)
-#define u_colorOnly true
-#define u_fullbright false
-#define u_flatshade false
-#define u_chrome true
-
-uniform vec2 u_uvScale;
-#endif
 
 out vec2 f_texCoord;
 out float f_fogFactor;
@@ -65,7 +70,7 @@ vec2 ChromeTexCoords(mat3x4 bone, vec3 normal)
     vec3 pos = vec3(bone[0].w, bone[1].w, bone[2].w);
 
     vec3 forward = normalize(pos - chromeOrigin);
-    vec3 up = normalize(cross(forward, cameraRight.xyz));
+    vec3 up = normalize(cross(forward, cameraRight));
     vec3 side = cross(forward, up);
 
     vec2 texCoords;
@@ -112,20 +117,20 @@ float ApplyBrightnessLinear(float value)
 
 vec4 ComputeColor(vec3 position, vec3 normal)
 {
-    if (u_colorOnly)
+    if (additive)
     {
-        // color as-is, used for additive and glowshell
+        // color as-is for additive
         return renderColor;
     }
 
-    if (u_fullbright)
+    if (fullbright)
     {
         // no lighting, alpha as-is
         return vec4(1.0, 1.0, 1.0, renderColor.a);
     }
 
     float diffuse;
-    if (u_flatshade)
+    if (flatshade)
     {
         diffuse = 0.8;
     }
@@ -162,21 +167,25 @@ void main()
     vec3 position = vec4(a_position, 1.0) * bone;
     vec3 normal = normalize(a_normal * boneRot);
 
-    f_texCoord = u_chrome ? ChromeTexCoords(bone, normal) : a_texCoord;
+    f_texCoord = chrome ? ChromeTexCoords(bone, normal) : a_texCoord;
 
 	// glowshell bullshit
 #if defined(GLOWSHELL)
 	// apply the texcoord scale kludge
-	f_texCoord *= u_uvScale;
+	f_texCoord *= uvScale;
 
 	// woah, shell effect
 	// FIXME: normalize this without NaNs???
 	position += normalize(a_smoothNormal * boneRot) * shellScale;
 #endif
 
+#if defined(GLOWSHELL)
+    f_color = renderColor;
+#else
     f_color = ComputeColor(position, normal);
+#endif
 
-    mat4 viewProj = u_viewmodel ? vmViewProjectionMatrix : viewProjectionMatrix;
+    mat4 viewProj = viewmodel ? vmViewProjectionMatrix : viewProjectionMatrix;
 
     gl_Position = viewProj * vec4(position, 1.0);
 

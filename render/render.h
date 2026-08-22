@@ -26,6 +26,8 @@ struct State
     int uniformBufferSize;
     int drawcallCount;
     int commandBufferSize;
+    int uniformBindCount; // glBindBufferRange calls issued
+    int uniformBindSkipCount; // redundant binds culled by the shadow state
 #endif
 
     // set when RenderScene is called

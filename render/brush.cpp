@@ -21,10 +21,11 @@ struct BrushConstants
     Vector4 renderColor;
 };
 
-struct BrushShader : BaseShader
+struct BrushTextureConstants
 {
-    GLint u_scroll;
-    GLint u_detailScale;
+    Vector2 detailScale;
+    float scroll;
+    int padding;
 };
 
 static const VertexAttrib s_vertexAttribs[] = {
@@ -39,9 +40,7 @@ const VertexFormat g_brushVertexFormat{ sizeof(gl3_brushvert_t), s_vertexAttribs
 static const ShaderUniform s_uniforms[] = {
     { "u_texture", 0 },
     { "u_lightmap", 1 },
-    { "u_detail", 2 },
-    { "u_scroll", &BrushShader::u_scroll },
-    { "u_detailScale", &BrushShader::u_detailScale },
+    { "u_detail", 2 }
 };
 
 static constexpr ShaderOption s_shaderOptions[] = {
@@ -71,10 +70,10 @@ struct ShaderOptionsUnlit
 };
 
 // lightmapped shaders
-static BrushShader s_shaders[shaderVariantCount(s_shaderOptions)];
+static BaseShader s_shaders[shaderVariantCount(s_shaderOptions)];
 
 // not lightmapped, color modulated by renderColor
-static BrushShader s_shadersUnlit[shaderVariantCount(s_shaderOptionsUnlit)];
+static BaseShader s_shadersUnlit[shaderVariantCount(s_shaderOptionsUnlit)];
 
 gl3_worldmodel_t g_worldmodel_static;
 
@@ -331,14 +330,20 @@ static float ScrollAmount(cl_entity_t *entity, gl3_texture_t *texture)
     }
 }
 
-static void DrawSurfaces(cl_entity_t *entity, BrushShader *shader, GLuint textureOverride)
+static void SetTextureConstants(const Vector2 &detailScale, float scroll)
 {
-    float prevScroll = 0;
-    commandUniform1f(shader->u_scroll, prevScroll);
+    BrushTextureConstants constants{ detailScale, scroll, 0 };
+    commandSetUniformData(UniformBlock::Texture, &constants, sizeof(constants));
+}
 
+static void DrawSurfaces(cl_entity_t *entity, BaseShader *shader, GLuint textureOverride)
+{
     if (textureOverride)
     {
         commandBindTexture(0, GL_TEXTURE_2D, textureOverride);
+
+        // i guess we need to set these... textureOverride can only be white
+        SetTextureConstants({ 0, 0 }, 0.0f);
     }
 
     for (int i = 0; i < g_worldmodel->numtextures; i++)
@@ -363,14 +368,6 @@ static void DrawSurfaces(cl_entity_t *entity, BrushShader *shader, GLuint textur
             continue;
         }
 
-        float scroll = ScrollAmount(entity, texture);
-        if (scroll != prevScroll)
-        {
-            DrawIndexBuffer(texture->basevertex);
-            prevScroll = scroll;
-            commandUniform1f(shader->u_scroll, prevScroll);
-        }
-
         if (!textureOverride)
         {
             gl3_texture_t *animated = TextureAnimation(entity, texture);
@@ -379,7 +376,9 @@ static void DrawSurfaces(cl_entity_t *entity, BrushShader *shader, GLuint textur
 
             // FIXME: does the detail texture follow the "animated" texture?
             int textureIndex = (int)(animated - g_worldmodel->textures);
-            detailSetTextureAndScale(textureIndex, shader->u_detailScale);
+            Vector2 detailScale = detailSetTextureAndGetScale(textureIndex);
+
+            SetTextureConstants(detailScale, ScrollAmount(entity, texture));
         }
 
         for (int j = 0; j < texture->numdrawsurfaces; j++)
@@ -484,7 +483,7 @@ static void DrawSkySurfaces()
 // draws all surfaces, decals, water and sky associated with this model
 static void DrawAllSurfaces(cl_entity_t *entity, bool lightmapped, bool alphaTest, GLuint textureOverride)
 {
-    BrushShader *shader;
+    BaseShader *shader;
 
     bool multiStyle = s_multiStyle;
     s_multiStyle = 0;
@@ -629,8 +628,7 @@ static void SetupConstantBuffer(cl_entity_t *entity, const Vector4 &renderColor)
 
     constants.renderColor = renderColor;
 
-    BufferSpan span = dynamicUniformData(&constants, sizeof(constants));
-    commandBindUniformBuffer(1, span.buffer, span.byteOffset, sizeof(constants));
+    commandSetUniformData(UniformBlock::Model, &constants, sizeof(constants));
 }
 
 static void LinkAndDrawWorldModel()

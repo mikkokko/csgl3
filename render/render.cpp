@@ -53,9 +53,10 @@ struct FrameConstants
     Matrix4 viewProjectionMatrix;
     Matrix4 skyMatrix; // sky is rendered every frame so leave this here for now
     Matrix4 vmViewProjectionMatrix; // viewmodel is rendered every frame so leave this here for now
-    Vector4 cameraRight; // only used by studio model chrome? why have it here
 
-    Vector4 clientTime; // FIXME: could pack with... something
+    // xyz = cameraRight (only used by studio model chrome)
+    // w = clientTime
+    Vector4 cameraRightAndClientTime;
 
     // 4 lights
     float dlights[4][MAX_SHADER_LIGHTS]; // x,y,z,1/radius^2
@@ -102,7 +103,7 @@ static cvar_t *gl_widescreen_yfov;
 // upload fog and non-fog constant buffers, switch between them with
 // VSSetConstantBuffers if we want to disable fog for some of the objects
 static bool s_fogConstantsEnabled;
-BufferSpan s_fogConstants[2];
+FogConstants s_fogConstants[2];
 
 static int Hk_CreateVisibleEntity(int type, cl_entity_t *entity)
 {
@@ -477,7 +478,7 @@ static int UpdateFrameConstants(const Matrix4 &vmViewProjectionMatrix)
     frameConstants.skyMatrix = SkyMatrix(g_state.viewOrigin);
     frameConstants.vmViewProjectionMatrix = vmViewProjectionMatrix;
 
-    frameConstants.cameraRight = { g_state.viewRight, 1 }; // temp
+    frameConstants.cameraRightAndClientTime = { g_state.viewRight, g_engfuncs.GetClientTime() };
 
     static_assert(sizeof(frameConstants.lightstyles) == sizeof(g_lightstyles) * 4, "wtf");
     for (int i = 0; i < MAX_LIGHTSTYLES; i++)
@@ -526,10 +527,7 @@ static int UpdateFrameConstants(const Matrix4 &vmViewProjectionMatrix)
         numLights++;
     }
 
-    frameConstants.clientTime.x = g_engfuncs.GetClientTime();
-
-    BufferSpan span = dynamicUniformData(&frameConstants, sizeof(frameConstants));
-    commandBindUniformBuffer(0, span.buffer, span.byteOffset, sizeof(frameConstants));
+    commandSetUniformData(UniformBlock::Frame, &frameConstants, sizeof(frameConstants));
 
     return numLights;
 }
@@ -549,9 +547,8 @@ void renderFogEnable(bool enable, bool forceUpdate)
 
     s_fogConstantsEnabled = enable;
 
-    const BufferSpan &constants = s_fogConstants[enable];
-    GL3_ASSERT(constants.buffer && constants.data);
-    commandBindUniformBuffer(2, constants.buffer, constants.byteOffset, sizeof(FogConstants));
+    const FogConstants &constants = s_fogConstants[enable];
+    commandSetUniformData(UniformBlock::Fog, &constants, sizeof(constants));
 }
 
 static float WaterFogDensity(float linearEnd)
@@ -562,10 +559,9 @@ static float WaterFogDensity(float linearEnd)
 
 static void UpdateFogConstants()
 {
-    FogConstants noFogConstants;
+    FogConstants &noFogConstants = s_fogConstants[false];
     noFogConstants.fogColor = { 0.0f, 1.0f, 0.0f, 1.0f };
     noFogConstants.fogParams = { 0.0f, 1.0f, 0.0f, 0.0f };
-    s_fogConstants[false] = dynamicUniformData(&noFogConstants, sizeof(FogConstants));
 
     if (g_state.sceneHasFog)
     {
@@ -591,10 +587,9 @@ static void UpdateFogConstants()
         const float log2e = 1.442695040889f; // log2(e)
         float param = -log2e * fogDensity * fogDensity;
 
-        FogConstants fogConstants;
+        FogConstants &fogConstants = s_fogConstants[true];
         fogConstants.fogColor = { fogColor, 1.0f };
         fogConstants.fogParams = { param, fogSkybox ? 0.0f : 1.0f, 0.0f, 0.0f };
-        s_fogConstants[true] = dynamicUniformData(&fogConstants, sizeof(FogConstants));
     }
 
     // if the level has fog, we start with fog enabled

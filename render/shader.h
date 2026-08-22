@@ -6,8 +6,17 @@ namespace Render
 
 struct VertexAttrib;
 
-// FIXME: determine from s_blockNames???
-constexpr int MaxUniformBlocks = 4;
+enum class UniformBlock
+{
+    Frame,
+    Fog,
+    Bone,
+    Model,
+    Texture,
+    Count
+};
+
+constexpr int MaxUniformBlocks = static_cast<int>(UniformBlock::Count);
 
 // FIXME: unfuck
 // NOTE: used by shaderembed
@@ -50,26 +59,22 @@ struct FlatBlock
     unsigned sequence; // draw time dirtiness checks
 };
 
+struct UniformLocation
+{
+    GLint location;
+    int shadowIndex; // index into uniformValues
+};
+
 struct ShaderUniform
 {
-    // mutable value: location will be stored at "field"
-    template<typename Field, typename Struct>
-    ShaderUniform(const char *_name, const Field Struct::*ptr)
+    // these are only for samplers at this point
+    ShaderUniform(const char *_name, int _samplerSlot)
     {
-        const Struct *object = nullptr;
-        const Field *field = &(object->*ptr);
-        offset = static_cast<int>(reinterpret_cast<intptr_t>(field));
+        samplerSlot = _samplerSlot;
         name = _name;
     }
 
-    // constant value: set after linking, not to be changed after
-    ShaderUniform(const char *_name, int constantValue)
-    {
-        offset = -1 - constantValue;
-        name = _name;
-    }
-
-    int offset;
+    int samplerSlot;
     const char *name;
 };
 
@@ -83,61 +88,12 @@ struct ShaderOption
 #define SHADER_OPTION(name, maxValue) { #name, maxValue }
 #define SHADER_OPTION_TERM() { nullptr, 0 }
 
-union UniformValue
-{
-    int int_[2]{};
-    float float_[2];
-};
-
-// open addressed on the uniform location, the key is location + 1 so a zeroed table is empty
-constexpr int MaxShaderUniforms = 8;
-
-// we're shadowing the default block to greatly reduce the size of command buffers
-struct UniformShadow
-{
-    GLuint keys[MaxShaderUniforms];
-    UniformValue values[MaxShaderUniforms];
-
-    UniformValue &operator[](GLint location)
-    {
-        GLuint key = location + 1;
-
-        unsigned slot = key & (MaxShaderUniforms - 1);
-
-        for (int i = 0; i < MaxShaderUniforms; i++)
-        {
-            if (keys[slot] == key)
-            {
-                return values[slot];
-            }
-
-            if (!keys[slot])
-            {
-                keys[slot] = key;
-                return values[slot];
-            }
-
-            slot = (slot + 1) & (MaxShaderUniforms - 1);
-        }
-
-        // never gets here
-        platformError("Uniform shadow overflow");
-    }
-
-    void clear()
-    {
-        memset(this, 0, sizeof(*this));
-    }
-};
-
-struct BaseShader
+struct BaseShader final
 {
     GLuint program;
 
     // only used when ARB_uniform_buffer_object is not available
     FlatBlock *flatBlocks;
-
-    UniformShadow uniformState;
 };
 
 void shaderInit();

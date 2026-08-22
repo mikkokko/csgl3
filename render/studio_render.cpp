@@ -5,7 +5,6 @@
 #include "studio_proxy.h"
 #include "gamma.h"
 #include "commandbuffer.h"
-#include "dynamicbuffer.h"
 #include "brush.h"
 
 namespace Render
@@ -23,6 +22,24 @@ struct StudioConstants
     // room for 4 lights, but only 3 used
     float elights[3][4]; // x,y,z
     float elightColors[3][4]; // r,g,b
+
+    // boolean constants...
+    int viewmodel;
+    int additive;
+    int padding[2];
+};
+
+struct StudioTextureConstants
+{
+    // only used for glowshell
+    Vector2 uvScale;
+
+    // not used for glowshell
+    // separate bools for GLSL 1.20
+    int fullbright;
+    int flatshade;
+    int chrome;
+    int padding;
 };
 
 static const VertexAttrib s_vertexAttribs[] = {
@@ -35,28 +52,8 @@ static const VertexAttrib s_vertexAttribs[] = {
 
 const VertexFormat g_studioVertexFormat{ sizeof(StudioVertex), s_vertexAttribs };
 
-struct StudioShader : BaseShader
-{
-    GLint u_viewmodel;
-
-    // used to be flags...
-    GLint u_colorOnly;
-    GLint u_fullbright;
-    GLint u_flatshade;
-    GLint u_chrome;
-
-    // glowshell only
-    GLint u_uvScale;
-};
-
 static const ShaderUniform s_uniforms[] = {
-    { "u_texture", 0 },
-    { "u_viewmodel", &StudioShader::u_viewmodel },
-    { "u_colorOnly", &StudioShader::u_colorOnly },
-    { "u_fullbright", &StudioShader::u_fullbright },
-    { "u_flatshade", &StudioShader::u_flatshade },
-    { "u_chrome", &StudioShader::u_chrome },
-    { "u_uvScale", &StudioShader::u_uvScale },
+    { "u_texture", 0 }
 };
 
 static constexpr ShaderOption s_shaderOptions[] = {
@@ -71,14 +68,13 @@ struct StudioShaderOptions
     unsigned hasElights;
 };
 
-static StudioShader s_shaders[shaderVariantCount(s_shaderOptions)];
+static BaseShader s_shaders[shaderVariantCount(s_shaderOptions)];
 
 // just use the same shader struct...
-static StudioShader s_shaderGlowShell;
+static BaseShader s_shaderGlowShell;
 
 // cringe global state for shader selection
 static bool s_viewmodel;
-static StudioShader *s_currentShader;
 
 static cvar_t *r_glowshellfreq;
 static cvar_t *cl_righthand;
@@ -227,7 +223,7 @@ void studioSetupLighting(StudioContext &context, const alight_t *lighting)
 
 static void StudioSetConstants(StudioContext &context)
 {
-    StudioConstants constants;
+    StudioConstants constants{};
 
     entity_state_t &state = context.entity->curstate;
     if (state.renderfx == kRenderFxGlowShell)
@@ -286,8 +282,10 @@ static void StudioSetConstants(StudioContext &context)
         constants.elightColors[2][i] = context.elightColors[i].z;
     }
 
-    BufferSpan span = dynamicUniformData(&constants, sizeof(constants));
-    commandBindUniformBuffer(1, span.buffer, span.byteOffset, sizeof(constants));
+    constants.viewmodel = s_viewmodel;
+    constants.additive = (context.rendermode == kRenderTransAdd);
+
+    commandSetUniformData(UniformBlock::Model, &constants, sizeof(constants));
 }
 
 static void StudioSetBonePalette(StudioContext &context, int paletteIndex)
@@ -305,8 +303,7 @@ static void StudioSetBonePalette(StudioContext &context, int paletteIndex)
 
     int constantsSize = sizeof(Matrix3x4) * palette.boneCount;
 
-    BufferSpan span = dynamicUniformData(constants, constantsSize);
-    commandBindUniformBuffer(3, span.buffer, span.byteOffset, constantsSize);
+    commandSetUniformData(UniformBlock::Bone, constants, constantsSize);
 
     context.bonePalette = paletteIndex;
 }
@@ -365,7 +362,7 @@ void studioRestoreRenderer(StudioContext &context)
 // selects and uses the correct shader program, sets uniforms on the default block
 static void StudioUseProgram(StudioContext &context, mstudiotexture_t *texture, int textureFlags)
 {
-    StudioShader *shader;
+    BaseShader *shader;
 
     bool glowShell = (context.entity->curstate.renderfx == kRenderFxGlowShell);
     if (glowShell)
@@ -380,12 +377,9 @@ static void StudioUseProgram(StudioContext &context, mstudiotexture_t *texture, 
         shader = &shaderSelect(s_shaders, s_shaderOptions, options);
     }
 
-    if (shader != s_currentShader)
-    {
-        s_currentShader = shader;
-        commandUseProgram(s_currentShader);
-        commandUniform1i(s_currentShader->u_viewmodel, s_viewmodel);
-    }
+    commandUseProgram(shader);
+
+    StudioTextureConstants constants{};
 
     if (glowShell)
     {
@@ -393,16 +387,16 @@ static void StudioUseProgram(StudioContext &context, mstudiotexture_t *texture, 
         // FIXME: this is not optimal.. should revisit and decide what to do
         float xScale = 64.0f / static_cast<float>(texture->width);
         float yScale = 64.0f / static_cast<float>(texture->height);
-        commandUniform2f(shader->u_uvScale, xScale, yScale);
+        constants.uvScale = { xScale, yScale };
     }
     else
     {
-        // update the flags uniform every time
-        commandUniform1i(shader->u_colorOnly, (context.rendermode == kRenderTransAdd));
-        commandUniform1i(shader->u_fullbright, (textureFlags & STUDIO_NF_FULLBRIGHT) != 0);
-        commandUniform1i(shader->u_flatshade, (textureFlags & STUDIO_NF_FLATSHADE) != 0);
-        commandUniform1i(shader->u_chrome, (textureFlags & STUDIO_NF_CHROME) != 0);
+        constants.fullbright = (textureFlags & STUDIO_NF_FULLBRIGHT) != 0;
+        constants.flatshade = (textureFlags & STUDIO_NF_FLATSHADE) != 0;
+        constants.chrome = (textureFlags & STUDIO_NF_CHROME) != 0;
     }
+
+    commandSetUniformData(UniformBlock::Texture, &constants, sizeof(constants));
 }
 
 static bool IsRemapSkin(const char *texture)
@@ -521,12 +515,11 @@ void studioDrawPoints(StudioContext &context)
 void studioBeginModels(bool viewmodel)
 {
     s_viewmodel = viewmodel;
-    GL3_ASSERT(!s_currentShader);
 }
 
 void studioEndModels()
 {
-    s_currentShader = nullptr;
+    // nothing
 }
 
 }

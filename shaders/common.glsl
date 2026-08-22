@@ -11,9 +11,10 @@ layout(std140) uniform FrameConstants
     mat4 viewProjectionMatrix;
     mat4 skyMatrix; // sky is rendered every frame so leave this here for now
     mat4 vmViewProjectionMatrix; // viewmodel is rendered every frame so leave this here for now
-    vec4 cameraRight; // only used by studio model chrome? why have it here
 
-    vec4 clientTime; // FIXME: could pack with... something
+    // xyz = cameraRight (only used by studio model chrome)
+    // w = clientTime
+    vec4 cameraRightAndClientTime;
 
     // 4 lights
     vec4 dlights[4]; // x,y,z,1/radius^2
@@ -22,6 +23,9 @@ layout(std140) uniform FrameConstants
     // accessed with lightstyles[i].x
     vec4 lightstyles[MAX_LIGHTSTYLES];
 };
+
+#define cameraRight cameraRightAndClientTime.xyz
+#define clientTime cameraRightAndClientTime.w
 
 // used by brush and studio shaders
 const float k_brightness = V_BRIGHTNESS;

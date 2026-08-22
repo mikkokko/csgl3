@@ -10,7 +10,7 @@ void detailInvalidate();
 
 bool detailIsActive();
 
-void detailSetTextureAndScale(int textureIndex, GLint scaleLocation);
+Vector2 detailSetTextureAndGetScale(int textureIndex);
 void detailClearTexture();
 
 }

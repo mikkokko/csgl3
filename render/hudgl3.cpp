@@ -117,6 +117,10 @@ static void DrawRenderHud(int screenWidth)
 
         Q_sprintf(string, "Command buffer size %d", g_state.commandBufferSize);
         g_engfuncs.pfnDrawString(screenWidth - 256, yoffset, string, red, green, blue);
+        yoffset += 16;
+
+        Q_sprintf(string, "Uniform binds %d (%d skipped)", g_state.uniformBindCount, g_state.uniformBindSkipCount);
+        g_engfuncs.pfnDrawString(screenWidth - 256, yoffset, string, red, green, blue);
     }
 #endif
 }

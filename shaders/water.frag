@@ -13,7 +13,7 @@ void main()
 {
     // quake style
     vec2 texCoord = f_texCoord.xy;
-    texCoord += sin(f_texCoord.yx + clientTime.x) * 0.125;
+    texCoord += sin(f_texCoord.yx + clientTime) * 0.125;
 
     vec4 diffuse = texture(u_texture, texCoord);
 
